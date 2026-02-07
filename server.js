@@ -6,12 +6,13 @@ const multer = require('multer');
 const sqlite3 = require('sqlite3').verbose();
 const session = require('express-session');
 const bcrypt = require('bcryptjs');
-const { S3Client, PutObjectCommand } = require('@aws-sdk/client-s3');
+const { S3Client, PutObjectCommand, DeleteObjectCommand } = require('@aws-sdk/client-s3');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 const UPLOADS_DIR = path.join(__dirname, 'uploads');
 const DB_PATH = process.env.DB_PATH || path.join(__dirname, 'data.db');
+const DAILY_UPLOAD_LIMIT = Math.max(1, Number.parseInt(process.env.DAILY_UPLOAD_LIMIT || '1000', 10));
 const TRUST_PROXY = process.env.TRUST_PROXY === 'true';
 const SESSION_COOKIE_SECURE = process.env.SESSION_COOKIE_SECURE === 'true';
 const SESSION_COOKIE_SAME_SITE = process.env.SESSION_COOKIE_SAME_SITE || 'lax';
@@ -88,9 +89,45 @@ function buildFileUrl(key) {
   return `/uploads/${key}`;
 }
 
+async function deleteStoredFile(filename) {
+  if (!filename) return;
+
+  if (hasR2UploadConfig) {
+    await s3.send(new DeleteObjectCommand({
+      Bucket: process.env.R2_BUCKET,
+      Key: filename
+    }));
+    return;
+  }
+
+  const safeFilename = path.basename(filename);
+  await fs.promises.unlink(path.join(UPLOADS_DIR, safeFilename));
+}
+
 function ensureAuth(req, res, next) {
   if (req.session && req.session.userId) return next();
   res.redirect('/login');
+}
+
+function getDayRangeMs(date = new Date()) {
+  const start = new Date(date);
+  start.setHours(0, 0, 0, 0);
+  const end = new Date(start);
+  end.setDate(end.getDate() + 1);
+  return { startMs: start.getTime(), endMs: end.getTime() };
+}
+
+function getEntryCountInRange(startMs, endMs) {
+  return new Promise((resolve, reject) => {
+    db.get(
+      'SELECT COUNT(*) AS c FROM entries WHERE created_at >= ? AND created_at < ?',
+      [startMs, endMs],
+      (err, row) => {
+        if (err) return reject(err);
+        resolve(row?.c || 0);
+      }
+    );
+  });
 }
 
 app.get('/', (req, res) => {
@@ -98,10 +135,14 @@ app.get('/', (req, res) => {
     if (err) return res.status(500).send('DB error');
     db.get('SELECT COUNT(*) AS c FROM users', (countErr, countRow) => {
       if (countErr) return res.status(500).send('DB error');
+      const uploadError = req.query.error === 'daily_limit'
+        ? `Daily upload limit reached (${DAILY_UPLOAD_LIMIT} posts). Try again tomorrow.`
+        : null;
       res.render('index', {
         entries: rows,
         userId: req.session.userId,
-        canRegister: (countRow?.c || 0) === 0
+        canRegister: (countRow?.c || 0) === 0,
+        uploadError
       });
     });
   });
@@ -113,6 +154,12 @@ app.post('/upload', ensureAuth, upload.single('photo'), async (req, res) => {
   let storedKey = null;
 
   try {
+    const { startMs, endMs } = getDayRangeMs();
+    const dailyCount = await getEntryCountInRange(startMs, endMs);
+    if (dailyCount >= DAILY_UPLOAD_LIMIT) {
+      return res.redirect('/?error=daily_limit');
+    }
+
     if (file) {
       const safeOriginalName = (file.originalname || 'upload.bin').replace(/[^a-z0-9.\-\_]/gi, '_');
       const key = `${Date.now()}-${safeOriginalName}`;
@@ -142,6 +189,34 @@ app.post('/upload', ensureAuth, upload.single('photo'), async (req, res) => {
     console.error(err);
     res.status(500).send('Upload error');
   }
+});
+
+app.post('/entries/:id/delete', ensureAuth, (req, res) => {
+  const entryId = Number.parseInt(req.params.id, 10);
+  if (!Number.isInteger(entryId) || entryId <= 0) {
+    return res.status(400).send('Invalid entry id');
+  }
+
+  db.get('SELECT filename FROM entries WHERE id = ?', [entryId], (fetchErr, row) => {
+    if (fetchErr) return res.status(500).send('DB error');
+    if (!row) return res.redirect('/');
+
+    db.run('DELETE FROM entries WHERE id = ?', [entryId], async (deleteErr) => {
+      if (deleteErr) return res.status(500).send('DB delete error');
+
+      if (row.filename) {
+        try {
+          await deleteStoredFile(row.filename);
+        } catch (fileErr) {
+          if (fileErr.code !== 'ENOENT' && fileErr.name !== 'NoSuchKey') {
+            console.error('File delete error:', fileErr);
+          }
+        }
+      }
+
+      res.redirect('/');
+    });
+  });
 });
 
 // Authentication routes

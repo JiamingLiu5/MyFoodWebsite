@@ -62,6 +62,7 @@ Environment variables:
 - `SITE_DOMAIN` — primary domain used by Caddy in production
 - `ACME_EMAIL` — email for Let's Encrypt certificate registration
 - `DB_PATH` — optional SQLite path (default `./data.db`)
+- `DAILY_UPLOAD_LIMIT` — max number of posts per day (default `1000`)
 
 Example run (local env):
 

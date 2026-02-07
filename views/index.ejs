@@ -1,0 +1,54 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>My Food Website</title>
+    <link rel="stylesheet" href="/static/style.css" />
+  </head>
+  <body>
+    <div class="container">
+      <header style="display:flex;justify-content:space-between;align-items:center">
+        <h1>My Food Notes & Photos</h1>
+        <div>
+          <% if (userId) { %>
+            <a href="/logout">Logout</a>
+          <% } else { %>
+            <a href="/login">Login</a>
+          <% } %>
+        </div>
+      </header>
+
+      <% if (userId) { %>
+      <form action="/upload" method="post" enctype="multipart/form-data" class="upload-form">
+        <label>Photo (optional)</label>
+        <input type="file" name="photo" accept="image/*" />
+        <label>Note</label>
+        <textarea name="note" rows="3" placeholder="Write something about this photo..."></textarea>
+        <button type="submit">Upload</button>
+      </form>
+      <% } else { %>
+        <p><em>Log in to upload photos and notes.</em></p>
+      <% } %>
+
+      <section class="entries">
+        <% if (entries.length === 0) { %>
+          <p>No entries yet.</p>
+        <% } else { %>
+          <% entries.forEach(function(e) { %>
+            <article class="entry">
+              <% if (e.filename) { %>
+                <img src="<%= fileUrl(e.filename) %>" alt="photo" />
+              <% } %>
+              <div class="meta">
+                <div class="note"><%= e.note ? e.note : '(no note)' %></div>
+                <div class="time"><%= new Date(e.created_at).toLocaleString() %></div>
+              </div>
+            </article>
+          <% }) %>
+        <% } %>
+      </section>
+    </div>
+  </body>
+  <script src="/static/script.js"></script>
+</html>

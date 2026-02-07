@@ -2,6 +2,17 @@ MyFoodWebsite
 
 This is a minimal Node.js + Express site to upload photos and notes, persisted in a local SQLite database. A Dockerfile and docker-compose are included for containerized runs.
 
+Storage behavior:
+
+- If Cloudflare R2 variables are configured, uploaded files are stored in R2.
+- If R2 variables are not configured, uploaded files are stored locally in `uploads/`.
+- SQLite data is stored at `data.db` by default (or `DB_PATH` if set).
+
+First-time setup:
+
+- Open `http://localhost:3000` and use the `Register` link to create the first user.
+- After one user exists, registration is disabled.
+
 Run locally:
 
 1. Install dependencies
@@ -24,6 +35,11 @@ Using Docker:
 docker compose up --build
 ```
 
+Docker persistence:
+
+- Uploaded files persist in `./uploads`.
+- SQLite data persists in `./data/data.db`.
+
 Files added:
 
 - [package.json](package.json)
@@ -33,13 +49,19 @@ Files added:
 - [Dockerfile](Dockerfile)
 - [docker-compose.yml](docker-compose.yml)
 
-Environment variables (for Cloudflare R2 + sessions):
+Environment variables:
 
-- `R2_ENDPOINT` — S3-compatible endpoint (optional)
-- `R2_BUCKET` — your R2 bucket name
-- `R2_ACCESS_KEY_ID` and `R2_SECRET_ACCESS_KEY` — R2 credentials
-- `R2_PUBLIC_BASE_URL` — optional public base URL to serve files (e.g. https://bucket.accountid.r2.cloudflarestorage.com)
+- `R2_ENDPOINT` — S3-compatible endpoint (optional; required for R2 uploads)
+- `R2_BUCKET` — your R2 bucket name (required for R2 uploads)
+- `R2_ACCESS_KEY_ID` and `R2_SECRET_ACCESS_KEY` — R2 credentials (required for R2 uploads)
+- `R2_PUBLIC_BASE_URL` — optional public base URL to serve files (for R2-hosted objects)
 - `SESSION_SECRET` — secret for session cookies
+- `SESSION_COOKIE_SECURE` — set `true` behind HTTPS reverse proxy
+- `SESSION_COOKIE_SAME_SITE` — cookie SameSite policy (default `lax`)
+- `TRUST_PROXY` — set `true` when behind Caddy or another reverse proxy
+- `SITE_DOMAIN` — primary domain used by Caddy in production
+- `ACME_EMAIL` — email for Let's Encrypt certificate registration
+- `DB_PATH` — optional SQLite path (default `./data.db`)
 
 Example run (local env):
 
@@ -53,3 +75,43 @@ export SESSION_SECRET="yoursecret"
 npm start
 ```
 
+Production deploy for `123.123.123.123` + `ldnmeals.com`:
+
+1. Point DNS records:
+
+- `A` record for `ldnmeals.com` -> `123.123.123.123`
+- `A` record for `www.ldnmeals.com` -> `123.123.123.123`
+
+2. On your server, install Docker:
+
+```bash
+sudo apt update
+sudo apt install -y docker.io docker-compose-plugin
+```
+
+3. Upload project to server and create production env file:
+
+```bash
+cp .env.example .env
+```
+
+Set at least:
+
+- `SESSION_SECRET=<strong-random-value>`
+- `SITE_DOMAIN=ldnmeals.com`
+- `ACME_EMAIL=<your-email>`
+
+4. Start the app with production compose:
+
+```bash
+docker compose -f deploy/docker-compose.prod.yml --env-file .env up -d --build
+```
+
+5. Optional firewall rules:
+
+```bash
+sudo ufw allow 80/tcp
+sudo ufw allow 443/tcp
+```
+
+Caddy is included in `deploy/docker-compose.prod.yml` and handles HTTPS certificates automatically for `SITE_DOMAIN` and `www.SITE_DOMAIN`.

@@ -15,6 +15,9 @@
             <a href="/logout">Logout</a>
           <% } else { %>
             <a href="/login">Login</a>
+            <% if (canRegister) { %>
+              | <a href="/register">Register</a>
+            <% } %>
           <% } %>
         </div>
       </header>

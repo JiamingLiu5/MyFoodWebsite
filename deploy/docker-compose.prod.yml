@@ -1,0 +1,41 @@
+services:
+  web:
+    build: ..
+    environment:
+      PORT: ${PORT:-3000}
+      SESSION_SECRET: ${SESSION_SECRET:-change_me}
+      SESSION_COOKIE_SECURE: "true"
+      SESSION_COOKIE_SAME_SITE: ${SESSION_COOKIE_SAME_SITE:-lax}
+      TRUST_PROXY: "true"
+      DB_PATH: /app/data/data.db
+      R2_ENDPOINT: ${R2_ENDPOINT:-}
+      R2_BUCKET: ${R2_BUCKET:-}
+      R2_ACCESS_KEY_ID: ${R2_ACCESS_KEY_ID:-}
+      R2_SECRET_ACCESS_KEY: ${R2_SECRET_ACCESS_KEY:-}
+      R2_PUBLIC_BASE_URL: ${R2_PUBLIC_BASE_URL:-}
+    expose:
+      - "3000"
+    volumes:
+      - ../uploads:/app/uploads
+      - ../data:/app/data
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2-alpine
+    depends_on:
+      - web
+    environment:
+      SITE_DOMAIN: ${SITE_DOMAIN:-ldnmeals.com}
+      ACME_EMAIL: ${ACME_EMAIL:-}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    restart: unless-stopped
+
+volumes:
+  caddy_data:
+  caddy_config:

@@ -1,27 +1,29 @@
-#!/usr/bin/env bash
-set -euo pipefail
+#!/bin/sh
+set -eu
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 BACKUP_DIR="${1:-$ROOT_DIR/backups}"
 TIMESTAMP="$(date +%F-%H%M%S)"
 
 mkdir -p "$BACKUP_DIR"
 
 DB_SOURCE="${DB_PATH:-}"
-if [[ -n "$DB_SOURCE" && "$DB_SOURCE" != /* ]]; then
-  DB_SOURCE="$ROOT_DIR/$DB_SOURCE"
-fi
+case "$DB_SOURCE" in
+  "") ;;
+  /*) ;;
+  *) DB_SOURCE="$ROOT_DIR/$DB_SOURCE" ;;
+esac
 
-if [[ -z "$DB_SOURCE" || ! -f "$DB_SOURCE" ]]; then
+if [ -z "$DB_SOURCE" ] || [ ! -f "$DB_SOURCE" ]; then
   for candidate in "$ROOT_DIR/data/data.db" "$ROOT_DIR/data.db"; do
-    if [[ -f "$candidate" ]]; then
+    if [ -f "$candidate" ]; then
       DB_SOURCE="$candidate"
       break
     fi
   done
 fi
 
-if [[ -n "${DB_SOURCE:-}" && -f "$DB_SOURCE" ]]; then
+if [ -n "${DB_SOURCE:-}" ] && [ -f "$DB_SOURCE" ]; then
   DB_BACKUP="$BACKUP_DIR/data-$TIMESTAMP.db"
   if command -v sqlite3 >/dev/null 2>&1; then
     sqlite3 "$DB_SOURCE" ".backup \"$DB_BACKUP\""
@@ -34,11 +36,12 @@ else
 fi
 
 UPLOADS_SOURCE="${UPLOADS_DIR:-$ROOT_DIR/uploads}"
-if [[ "$UPLOADS_SOURCE" != /* ]]; then
-  UPLOADS_SOURCE="$ROOT_DIR/$UPLOADS_SOURCE"
-fi
+case "$UPLOADS_SOURCE" in
+  /*) ;;
+  *) UPLOADS_SOURCE="$ROOT_DIR/$UPLOADS_SOURCE" ;;
+esac
 
-if [[ -d "$UPLOADS_SOURCE" ]]; then
+if [ -d "$UPLOADS_SOURCE" ]; then
   UPLOADS_BACKUP="$BACKUP_DIR/uploads-$TIMESTAMP.tar.gz"
   tar -czf "$UPLOADS_BACKUP" -C "$UPLOADS_SOURCE" .
   echo "Uploads backup created: $UPLOADS_BACKUP"

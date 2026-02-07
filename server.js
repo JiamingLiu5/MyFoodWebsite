@@ -104,6 +104,25 @@ async function deleteStoredFile(filename) {
   await fs.promises.unlink(path.join(UPLOADS_DIR, safeFilename));
 }
 
+async function storeUploadedFile(file) {
+  const safeOriginalName = (file.originalname || 'upload.bin').replace(/[^a-z0-9.\-\_]/gi, '_');
+  const key = `${Date.now()}-${safeOriginalName}`;
+
+  if (hasR2UploadConfig) {
+    const put = new PutObjectCommand({
+      Bucket: process.env.R2_BUCKET,
+      Key: key,
+      Body: file.buffer,
+      ContentType: file.mimetype
+    });
+    await s3.send(put);
+  } else {
+    await fs.promises.writeFile(path.join(UPLOADS_DIR, key), file.buffer);
+  }
+
+  return { key, originalname: file.originalname || null };
+}
+
 function ensureAuth(req, res, next) {
   if (req.session && req.session.userId) return next();
   res.redirect('/login');
@@ -161,22 +180,8 @@ app.post('/upload', ensureAuth, upload.single('photo'), async (req, res) => {
     }
 
     if (file) {
-      const safeOriginalName = (file.originalname || 'upload.bin').replace(/[^a-z0-9.\-\_]/gi, '_');
-      const key = `${Date.now()}-${safeOriginalName}`;
-
-      if (hasR2UploadConfig) {
-        const put = new PutObjectCommand({
-          Bucket: process.env.R2_BUCKET,
-          Key: key,
-          Body: file.buffer,
-          ContentType: file.mimetype
-        });
-        await s3.send(put);
-      } else {
-        await fs.promises.writeFile(path.join(UPLOADS_DIR, key), file.buffer);
-      }
-
-      storedKey = key;
+      const stored = await storeUploadedFile(file);
+      storedKey = stored.key;
     }
 
     const stmt = db.prepare('INSERT INTO entries(filename, originalname, note, created_at) VALUES (?,?,?,?)');
@@ -189,6 +194,87 @@ app.post('/upload', ensureAuth, upload.single('photo'), async (req, res) => {
     console.error(err);
     res.status(500).send('Upload error');
   }
+});
+
+app.get('/entries/:id/edit', ensureAuth, (req, res) => {
+  const entryId = Number.parseInt(req.params.id, 10);
+  if (!Number.isInteger(entryId) || entryId <= 0) {
+    return res.status(400).send('Invalid entry id');
+  }
+
+  db.get('SELECT * FROM entries WHERE id = ?', [entryId], (err, row) => {
+    if (err) return res.status(500).send('DB error');
+    if (!row) return res.status(404).send('Entry not found');
+    res.render('edit', { entry: row, error: null });
+  });
+});
+
+app.post('/entries/:id/edit', ensureAuth, upload.single('photo'), async (req, res) => {
+  const entryId = Number.parseInt(req.params.id, 10);
+  if (!Number.isInteger(entryId) || entryId <= 0) {
+    return res.status(400).send('Invalid entry id');
+  }
+
+  const note = req.body.note || '';
+  const removePhoto = req.body.removePhoto === 'on';
+  const newFile = req.file || null;
+
+  db.get('SELECT * FROM entries WHERE id = ?', [entryId], async (fetchErr, row) => {
+    if (fetchErr) return res.status(500).send('DB error');
+    if (!row) return res.status(404).send('Entry not found');
+
+    let nextFilename = row.filename;
+    let nextOriginalname = row.originalname;
+    let newlyUploadedFilename = null;
+
+    try {
+      if (newFile) {
+        const stored = await storeUploadedFile(newFile);
+        nextFilename = stored.key;
+        nextOriginalname = stored.originalname;
+        newlyUploadedFilename = stored.key;
+
+        if (row.filename) {
+          try {
+            await deleteStoredFile(row.filename);
+          } catch (fileErr) {
+            if (fileErr.code !== 'ENOENT' && fileErr.name !== 'NoSuchKey') {
+              console.error('File delete error:', fileErr);
+            }
+          }
+        }
+      } else if (removePhoto && row.filename) {
+        nextFilename = null;
+        nextOriginalname = null;
+        try {
+          await deleteStoredFile(row.filename);
+        } catch (fileErr) {
+          if (fileErr.code !== 'ENOENT' && fileErr.name !== 'NoSuchKey') {
+            console.error('File delete error:', fileErr);
+          }
+        }
+      }
+
+      db.run(
+        'UPDATE entries SET filename = ?, originalname = ?, note = ? WHERE id = ?',
+        [nextFilename, nextOriginalname, note, entryId],
+        (updateErr) => {
+          if (updateErr) {
+            if (newlyUploadedFilename) {
+              deleteStoredFile(newlyUploadedFilename).catch((cleanupErr) => {
+                console.error('Uploaded file cleanup error:', cleanupErr);
+              });
+            }
+            return res.status(500).send('DB update error');
+          }
+          res.redirect('/');
+        }
+      );
+    } catch (err) {
+      console.error(err);
+      res.status(500).send('Edit error');
+    }
+  });
 });
 
 app.post('/entries/:id/delete', ensureAuth, (req, res) => {

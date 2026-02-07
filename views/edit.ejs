@@ -1,0 +1,37 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Edit Post</title>
+    <link rel="stylesheet" href="/static/style.css" />
+  </head>
+  <body>
+    <div class="container">
+      <h1>Edit Post</h1>
+
+      <% if (error) { %>
+        <div style="color:red"><%= error %></div>
+      <% } %>
+
+      <% if (entry.filename) { %>
+        <article class="entry">
+          <img src="<%= fileUrl(entry.filename) %>" alt="Current photo" />
+        </article>
+      <% } %>
+
+      <form action="/entries/<%= entry.id %>/edit" method="post" enctype="multipart/form-data" class="upload-form">
+        <label>Replace photo (optional)</label>
+        <input type="file" name="photo" accept="image/*" />
+        <% if (entry.filename) { %>
+          <label><input type="checkbox" name="removePhoto" /> Remove existing photo</label>
+        <% } %>
+        <label>Note</label>
+        <textarea name="note" rows="4" placeholder="Update your note..."><%= entry.note || '' %></textarea>
+        <button type="submit">Save</button>
+      </form>
+
+      <p><a href="/">Back</a></p>
+    </div>
+  </body>
+</html>

@@ -58,6 +58,7 @@
                 <div class="note"><%= e.note ? e.note : '(no note)' %></div>
                 <div class="time"><%= new Date(e.created_at).toLocaleString() %></div>
                 <% if (userId) { %>
+                  <a class="edit-btn" href="/entries/<%= e.id %>/edit">Edit</a>
                   <form class="delete-form" action="/entries/<%= e.id %>/delete" method="post" onsubmit="return confirm('Delete this post?')">
                     <button class="delete-btn" type="submit">Delete</button>
                   </form>

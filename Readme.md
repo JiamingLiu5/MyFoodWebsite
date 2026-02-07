@@ -40,6 +40,26 @@ Docker persistence:
 - Uploaded files persist in `./uploads`.
 - SQLite data persists in `./data/data.db`.
 
+Backup and Timeback:
+
+- Create backup now:
+
+```bash
+sh back.sh
+```
+
+- Restore database to nearest backup from 3 days ago (or older):
+
+```bash
+sh timeback.sh 3
+```
+
+- Non-interactive restore:
+
+```bash
+sh timeback.sh 3 --yes
+```
+
 Files added:
 
 - [package.json](package.json)

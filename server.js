@@ -585,6 +585,51 @@ function getRegistrationCountInRange(startMs, endMs) {
   });
 }
 
+async function findRegistrationConflicts(username, email, options = {}) {
+  const includePending = options.includePending === true;
+  const normalizedUsername = String(username || '').trim();
+  const normalizedEmail = normalizeEmail(email);
+  const usernameLookup = normalizedUsername.toLowerCase();
+  const nowMs = Date.now();
+
+  const [usernameInUsers, emailInUsers] = await Promise.all([
+    dbGetAsync('SELECT id FROM users WHERE LOWER(username) = ? LIMIT 1', [usernameLookup]),
+    dbGetAsync('SELECT id FROM users WHERE email = ? LIMIT 1', [normalizedEmail])
+  ]);
+
+  if (!includePending) {
+    return {
+      usernameTaken: Boolean(usernameInUsers),
+      emailTaken: Boolean(emailInUsers)
+    };
+  }
+
+  const [usernameInPending, emailInPending] = await Promise.all([
+    dbGetAsync(
+      'SELECT id FROM pending_registrations WHERE LOWER(username) = ? AND code_expires_at >= ? LIMIT 1',
+      [usernameLookup, nowMs]
+    ),
+    dbGetAsync(
+      'SELECT id FROM pending_registrations WHERE email = ? AND code_expires_at >= ? LIMIT 1',
+      [normalizedEmail, nowMs]
+    )
+  ]);
+
+  return {
+    usernameTaken: Boolean(usernameInUsers || usernameInPending),
+    emailTaken: Boolean(emailInUsers || emailInPending)
+  };
+}
+
+function getRegistrationConflictMessage(conflicts) {
+  if (conflicts.usernameTaken && conflicts.emailTaken) {
+    return 'Username and email are already registered or awaiting verification.';
+  }
+  if (conflicts.usernameTaken) return 'Username is already registered or awaiting verification.';
+  if (conflicts.emailTaken) return 'Email is already registered or awaiting verification.';
+  return null;
+}
+
 app.get('/', async (req, res) => {
   try {
     const isAdmin = req.userRole === 'admin';
@@ -881,7 +926,15 @@ app.post('/entries/:id/delete', ensureOwnerOrAdmin, verifyCsrfToken, async (req,
 app.get('/admin/users', ensureAdmin, async (req, res) => {
   try {
     const users = await dbAllAsync('SELECT id, username, role, can_pin FROM users ORDER BY id ASC');
-    res.render('admin-users', { users, userId: req.session.userId, userRole: req.userRole });
+    const adminUserError = typeof req.query.error === 'string' ? req.query.error : null;
+    const adminUserMessage = typeof req.query.success === 'string' ? req.query.success : null;
+    res.render('admin-users', {
+      users,
+      userId: req.session.userId,
+      userRole: req.userRole,
+      adminUserError,
+      adminUserMessage
+    });
   } catch (err) {
     console.error(err);
     res.status(500).send('Error loading users');
@@ -948,6 +1001,32 @@ app.post('/admin/users/:id/pin-permission', ensureAdmin, verifyCsrfToken, async 
   } catch (err) {
     console.error(err);
     res.status(500).send('Error updating pin permission');
+  }
+});
+
+app.post('/admin/users/:id/reset-password', ensureAdmin, verifyCsrfToken, async (req, res) => {
+  const targetUserId = Number.parseInt(req.params.id, 10);
+  const newPassword = String(req.body.newPassword || '');
+
+  if (!Number.isInteger(targetUserId) || targetUserId <= 0) {
+    return res.status(400).send('Invalid user id');
+  }
+
+  if (newPassword.length < 8) {
+    return res.redirect('/admin/users?error=Password%20must%20be%20at%20least%208%20characters.');
+  }
+
+  try {
+    const user = await dbGetAsync('SELECT id FROM users WHERE id = ?', [targetUserId]);
+    if (!user) return res.status(404).send('User not found');
+
+    const newHash = bcrypt.hashSync(newPassword, 10);
+    await dbRunAsync('UPDATE users SET password_hash = ? WHERE id = ?', [newHash, targetUserId]);
+
+    return res.redirect(`/admin/users?success=Password%20reset%20for%20user%20%23${targetUserId}.`);
+  } catch (err) {
+    console.error(err);
+    return res.redirect('/admin/users?error=Failed%20to%20reset%20password.');
   }
 });
 
@@ -1108,10 +1187,11 @@ app.post('/register', makeAuthRateLimiter('register'), verifyCsrfToken, async (r
       });
     }
 
-    const existingUser = await dbGetAsync('SELECT id FROM users WHERE username = ? OR email = ?', [username, email]);
-    if (existingUser) {
+    const registerConflicts = await findRegistrationConflicts(username, email, { includePending: true });
+    const registerConflictMessage = getRegistrationConflictMessage(registerConflicts);
+    if (registerConflictMessage) {
       return res.status(400).render('register', {
-        error: 'Username or email already exists',
+        error: registerConflictMessage,
         info: null,
         username,
         email,
@@ -1143,6 +1223,18 @@ app.post('/register', makeAuthRateLimiter('register'), verifyCsrfToken, async (r
     res.redirect('/register/verify');
   } catch (err) {
     console.error(err);
+    if (err && err.code === 'SQLITE_CONSTRAINT') {
+      const registerConflicts = await findRegistrationConflicts(username, email, { includePending: true });
+      const registerConflictMessage = getRegistrationConflictMessage(registerConflicts) || 'Username or email is already registered.';
+      return res.status(400).render('register', {
+        error: registerConflictMessage,
+        info: null,
+        username,
+        email,
+        isFirstUser,
+        emailVerificationEnabled: EMAIL_VERIFICATION_ENABLED
+      });
+    }
     res.status(500).render('register', {
       error: 'Failed to send verification email. Check SMTP settings and try again.',
       info: null,
@@ -1277,11 +1369,12 @@ app.post('/register/verify', makeAuthRateLimiter('register_verify'), verifyCsrfT
       });
     }
 
-    const existingUser = await dbGetAsync('SELECT id FROM users WHERE username = ? OR email = ?', [pending.username, pending.email]);
-    if (existingUser) {
+    const verifyConflicts = await findRegistrationConflicts(pending.username, pending.email, { includePending: false });
+    const verifyConflictMessage = getRegistrationConflictMessage(verifyConflicts);
+    if (verifyConflictMessage) {
       await dbRunAsync('DELETE FROM pending_registrations WHERE username = ?', [pending.username]);
       return res.status(400).render('register', {
-        error: 'Username or email already exists. Please try registering again.',
+        error: `${verifyConflictMessage} Please try registering again.`,
         info: null,
         username: '',
         email: '',
@@ -1306,6 +1399,17 @@ app.post('/register/verify', makeAuthRateLimiter('register_verify'), verifyCsrfT
     res.redirect('/');
   } catch (err) {
     console.error(err);
+    if (err && err.code === 'SQLITE_CONSTRAINT') {
+      await dbRunAsync('DELETE FROM pending_registrations WHERE username = ?', [username]);
+      return res.status(400).render('register', {
+        error: 'Username or email is already registered. Please try registering again.',
+        info: null,
+        username: '',
+        email: '',
+        isFirstUser: false,
+        emailVerificationEnabled: EMAIL_VERIFICATION_ENABLED
+      });
+    }
     res.status(500).render('register-verify', {
       error: 'Verification failed. Please try again.',
       info: null,

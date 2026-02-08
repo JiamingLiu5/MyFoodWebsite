@@ -22,6 +22,13 @@
         </nav>
       </header>
 
+      <% if (adminUserError) { %>
+        <p class="upload-error"><%= adminUserError %></p>
+      <% } %>
+      <% if (adminUserMessage) { %>
+        <p class="success-note"><%= adminUserMessage %></p>
+      <% } %>
+
       <section class="users-list">
         <% if (users.length === 0) { %>
           <p>No users found.</p>
@@ -57,6 +64,11 @@
                     </span>
                   </td>
                   <td class="user-actions">
+                    <form class="inline-form reset-password-form" action="/admin/users/<%= user.id %>/reset-password" method="post">
+                      <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
+                      <input class="reset-password-input" type="password" name="newPassword" minlength="8" placeholder="New password (min 8)" required />
+                      <button class="reset-btn" type="submit" onclick="return confirm('Reset password for <%= user.username %>?')">Reset Password</button>
+                    </form>
                     <% if (user.id !== userId) { %>
                       <!-- Change role -->
                       <form class="inline-form" action="/admin/users/<%= user.id %>/role" method="post">
@@ -85,7 +97,7 @@
                         <button class="delete-btn" type="submit">Delete</button>
                       </form>
                     <% } else { %>
-                      <span class="info-text">Current user</span>
+                      <span class="info-text">Current user (self reset allowed)</span>
                     <% } %>
                   </td>
                 </tr>
@@ -100,6 +112,7 @@
         <ul>
           <li><strong>Admin users</strong> can see all posts, create/edit/delete any post, pin/unpin posts, and manage users.</li>
           <li><strong>Pin right</strong> lets a non-admin user pin/unpin posts they can view without giving admin access.</li>
+          <li><strong>Password reset</strong> allows admin to set a new password for any user, including self.</li>
           <li><strong>Normal users</strong> can create and manage their own posts, and view pinned content from others.</li>
           <li>You cannot delete or demote yourself.</li>
           <li>You cannot delete or demote the last admin user.</li>

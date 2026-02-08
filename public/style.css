@@ -492,6 +492,21 @@ body.enable-reveal .entry.is-visible{opacity:1;transform:translateY(0) scale(1)}
   margin:0;
 }
 
+.reset-password-form{
+  display:flex;
+  align-items:center;
+  gap:8px;
+}
+
+.reset-password-input{
+  min-width:190px;
+  max-width:260px;
+  padding:8px 10px;
+  border:1px solid #ced7e0;
+  border-radius:8px;
+  font:inherit;
+}
+
 .auth-secondary-actions{
   display:flex;
   align-items:center;
@@ -530,6 +545,23 @@ body.enable-reveal .entry.is-visible{opacity:1;transform:translateY(0) scale(1)}
 
 .perm-btn:hover{
   background:#ffefc2;
+  transform:translateY(-1px);
+}
+
+.reset-btn{
+  padding:8px 14px;
+  background:#eef5ff;
+  color:#2b5987;
+  border:1px solid #b9cde4;
+  border-radius:8px;
+  font-size:13px;
+  font-weight:700;
+  cursor:pointer;
+  transition:all 0.2s ease;
+}
+
+.reset-btn:hover{
+  background:#deecff;
   transform:translateY(-1px);
 }
 

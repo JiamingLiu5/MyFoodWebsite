@@ -5,6 +5,8 @@ services:
       PORT: ${PORT:-3000}
       SESSION_SECRET: ${SESSION_SECRET:-devsecret}
       DB_PATH: ${DB_PATH:-/app/data/data.db}
+      DAILY_UPLOAD_LIMIT: ${DAILY_UPLOAD_LIMIT:-1000}
+      MAX_IMAGES_PER_POST: ${MAX_IMAGES_PER_POST:-10}
       R2_ENDPOINT: ${R2_ENDPOINT:-}
       R2_BUCKET: ${R2_BUCKET:-}
       R2_ACCESS_KEY_ID: ${R2_ACCESS_KEY_ID:-}

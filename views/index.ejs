@@ -24,8 +24,8 @@
 
       <% if (userId) { %>
       <form action="/upload" method="post" enctype="multipart/form-data" class="upload-form">
-        <label>Photo (optional)</label>
-        <input type="file" name="photo" accept="image/*" />
+        <label>Photos (optional, up to <%= maxImagesPerPost %>)</label>
+        <input type="file" name="photos" accept="image/*" multiple />
         <div class="upload-preview" id="uploadPreview" hidden>
           <img id="uploadPreviewImg" alt="Selected photo preview" />
           <div class="upload-preview-meta">
@@ -51,17 +51,34 @@
         <% } else { %>
           <% entries.forEach(function(e) { %>
             <article class="entry">
-              <% if (e.filename) { %>
-                <img src="<%= fileUrl(e.filename) %>" alt="photo" />
+              <% if (e.images && e.images.length) { %>
+                <% const previewImages = e.images.slice(0, 4); %>
+                <a class="entry-image-link" href="/entries/<%= e.id %>">
+                  <div class="entry-images <%= e.images.length > 1 ? 'is-multi' : 'is-single' %>">
+                    <% previewImages.forEach(function(img) { %>
+                      <img src="<%= fileUrl(img.filename) %>" alt="photo" />
+                    <% }) %>
+                    <% if (e.images.length > 4) { %>
+                      <div class="entry-images-more">+<%= e.images.length - 4 %></div>
+                    <% } %>
+                  </div>
+                </a>
               <% } %>
               <div class="meta">
                 <div class="note"><%= e.note ? e.note : '(no note)' %></div>
                 <div class="time"><%= new Date(e.created_at).toLocaleString() %></div>
                 <% if (userId) { %>
-                  <a class="edit-btn" href="/entries/<%= e.id %>/edit">Edit</a>
-                  <form class="delete-form" action="/entries/<%= e.id %>/delete" method="post" onsubmit="return confirm('Delete this post?')">
-                    <button class="delete-btn" type="submit">Delete</button>
-                  </form>
+                  <div class="entry-actions">
+                    <a class="view-btn" href="/entries/<%= e.id %>">View</a>
+                    <a class="edit-btn" href="/entries/<%= e.id %>/edit">Edit</a>
+                    <form class="delete-form" action="/entries/<%= e.id %>/delete" method="post" onsubmit="return confirm('Delete this post?')">
+                      <button class="delete-btn" type="submit">Delete</button>
+                    </form>
+                  </div>
+                <% } else { %>
+                  <div class="entry-actions">
+                    <a class="view-btn" href="/entries/<%= e.id %>">View</a>
+                  </div>
                 <% } %>
               </div>
             </article>

@@ -2,6 +2,12 @@ MyFoodWebsite
 
 This is a minimal Node.js + Express site to upload photos and notes, persisted in a local SQLite database. A Dockerfile and docker-compose are included for containerized runs.
 
+Post features:
+
+- Multiple images per post (default max 10 per post).
+- Single-post detail page with full-size image viewer on click.
+- Edit and delete existing posts.
+
 Storage behavior:
 
 - If Cloudflare R2 variables are configured, uploaded files are stored in R2.
@@ -83,6 +89,7 @@ Environment variables:
 - `ACME_EMAIL` — email for Let's Encrypt certificate registration
 - `DB_PATH` — optional SQLite path (default `./data.db`)
 - `DAILY_UPLOAD_LIMIT` — max number of posts per day (default `1000`)
+- `MAX_IMAGES_PER_POST` — max images allowed in one post (default `10`)
 
 Example run (local env):
 

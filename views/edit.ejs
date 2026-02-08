@@ -14,17 +14,29 @@
         <div style="color:red"><%= error %></div>
       <% } %>
 
-      <% if (entry.filename) { %>
+      <% if (entry.images && entry.images.length) { %>
         <article class="entry">
-          <img src="<%= fileUrl(entry.filename) %>" alt="Current photo" />
+          <div class="entry-images <%= entry.images.length > 1 ? 'is-multi' : 'is-single' %>">
+            <% entry.images.forEach(function(img) { %>
+              <div class="editable-image">
+                <a class="entry-image-link" href="<%= fileUrl(img.filename) %>" data-lightbox>
+                  <img src="<%= fileUrl(img.filename) %>" alt="Current photo" />
+                </a>
+                <label class="remove-image-label">
+                  <input type="checkbox" name="removeImageIds" value="<%= img.id %>" form="editPostForm" />
+                  Remove this image
+                </label>
+              </div>
+            <% }) %>
+          </div>
         </article>
       <% } %>
 
-      <form action="/entries/<%= entry.id %>/edit" method="post" enctype="multipart/form-data" class="upload-form">
-        <label>Replace photo (optional)</label>
-        <input type="file" name="photo" accept="image/*" />
-        <% if (entry.filename) { %>
-          <label><input type="checkbox" name="removePhoto" /> Remove existing photo</label>
+      <form id="editPostForm" action="/entries/<%= entry.id %>/edit" method="post" enctype="multipart/form-data" class="upload-form">
+        <label>Add photos (optional, up to <%= maxImagesPerPost %> total)</label>
+        <input type="file" name="photos" accept="image/*" multiple />
+        <% if (entry.images && entry.images.length) { %>
+          <label><input type="checkbox" name="removeAllPhotos" /> Remove all existing photos</label>
         <% } %>
         <label>Note</label>
         <textarea name="note" rows="4" placeholder="Update your note..."><%= entry.note || '' %></textarea>
@@ -33,5 +45,6 @@
 
       <p><a href="/">Back</a></p>
     </div>
+    <script src="/static/script.js"></script>
   </body>
 </html>

@@ -13,6 +13,7 @@ const PORT = process.env.PORT || 3000;
 const UPLOADS_DIR = path.join(__dirname, 'uploads');
 const DB_PATH = process.env.DB_PATH || path.join(__dirname, 'data.db');
 const DAILY_UPLOAD_LIMIT = Math.max(1, Number.parseInt(process.env.DAILY_UPLOAD_LIMIT || '1000', 10));
+const MAX_IMAGES_PER_POST = Math.max(1, Number.parseInt(process.env.MAX_IMAGES_PER_POST || '10', 10));
 const TRUST_PROXY = process.env.TRUST_PROXY === 'true';
 const SESSION_COOKIE_SECURE = process.env.SESSION_COOKIE_SECURE === 'true';
 const SESSION_COOKIE_SAME_SITE = process.env.SESSION_COOKIE_SAME_SITE || 'lax';
@@ -31,7 +32,10 @@ if (TRUST_PROXY) {
 }
 
 // Configure storage: we'll upload to Cloudflare R2 using S3-compatible API.
-const upload = multer({ storage: multer.memoryStorage() });
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { files: MAX_IMAGES_PER_POST }
+});
 
 // Setup view engine and static
 app.set('view engine', 'ejs');
@@ -62,6 +66,24 @@ db.serialize(() => {
     note TEXT,
     created_at INTEGER
   )`);
+  db.run(`CREATE TABLE IF NOT EXISTS entry_images (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    entry_id INTEGER NOT NULL,
+    filename TEXT NOT NULL,
+    originalname TEXT,
+    sort_order INTEGER DEFAULT 0
+  )`);
+  db.run('CREATE INDEX IF NOT EXISTS idx_entry_images_entry_id ON entry_images(entry_id)');
+  // Backfill legacy single-image entries into entry_images.
+  db.run(`
+    INSERT INTO entry_images(entry_id, filename, originalname, sort_order)
+    SELECT e.id, e.filename, e.originalname, 0
+    FROM entries e
+    WHERE e.filename IS NOT NULL
+      AND NOT EXISTS (
+        SELECT 1 FROM entry_images i WHERE i.entry_id = e.id
+      )
+  `);
   db.run(`CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     username TEXT UNIQUE,
@@ -87,6 +109,90 @@ function buildFileUrl(key) {
     return `${process.env.R2_ENDPOINT.replace(/\/$/, '')}/${process.env.R2_BUCKET}/${key}`;
   }
   return `/uploads/${key}`;
+}
+
+function dbGetAsync(sql, params = []) {
+  return new Promise((resolve, reject) => {
+    db.get(sql, params, (err, row) => {
+      if (err) return reject(err);
+      resolve(row);
+    });
+  });
+}
+
+function dbAllAsync(sql, params = []) {
+  return new Promise((resolve, reject) => {
+    db.all(sql, params, (err, rows) => {
+      if (err) return reject(err);
+      resolve(rows);
+    });
+  });
+}
+
+function dbRunAsync(sql, params = []) {
+  return new Promise((resolve, reject) => {
+    db.run(sql, params, function runHandler(err) {
+      if (err) return reject(err);
+      resolve(this);
+    });
+  });
+}
+
+async function getEntryImagesForEntry(entryId, legacyEntry) {
+  const rows = await dbAllAsync(
+    'SELECT id, entry_id, filename, originalname, sort_order FROM entry_images WHERE entry_id = ? ORDER BY sort_order, id',
+    [entryId]
+  );
+  if (rows.length > 0) return rows;
+  if (legacyEntry && legacyEntry.filename) {
+    await dbRunAsync(
+      'INSERT INTO entry_images(entry_id, filename, originalname, sort_order) VALUES (?,?,?,?)',
+      [entryId, legacyEntry.filename, legacyEntry.originalname || null, 0]
+    );
+    return dbAllAsync(
+      'SELECT id, entry_id, filename, originalname, sort_order FROM entry_images WHERE entry_id = ? ORDER BY sort_order, id',
+      [entryId]
+    );
+  }
+  return [];
+}
+
+async function getEntryImagesMap(entryIds, entriesById) {
+  const map = {};
+  if (!entryIds.length) return map;
+
+  const placeholders = entryIds.map(() => '?').join(',');
+  const rows = await dbAllAsync(
+    `SELECT id, entry_id, filename, originalname, sort_order
+     FROM entry_images
+     WHERE entry_id IN (${placeholders})
+     ORDER BY entry_id, sort_order, id`,
+    entryIds
+  );
+
+  for (const row of rows) {
+    if (!map[row.entry_id]) map[row.entry_id] = [];
+    map[row.entry_id].push(row);
+  }
+
+  for (const entryId of entryIds) {
+    if (!map[entryId] || map[entryId].length === 0) {
+      const legacy = entriesById[entryId];
+      if (legacy && legacy.filename) {
+        map[entryId] = [{
+          id: null,
+          entry_id: entryId,
+          filename: legacy.filename,
+          originalname: legacy.originalname || null,
+          sort_order: 0
+        }];
+      } else {
+        map[entryId] = [];
+      }
+    }
+  }
+
+  return map;
 }
 
 async function deleteStoredFile(filename) {
@@ -149,28 +255,36 @@ function getEntryCountInRange(startMs, endMs) {
   });
 }
 
-app.get('/', (req, res) => {
-  db.all('SELECT * FROM entries ORDER BY created_at DESC', (err, rows) => {
-    if (err) return res.status(500).send('DB error');
-    db.get('SELECT COUNT(*) AS c FROM users', (countErr, countRow) => {
-      if (countErr) return res.status(500).send('DB error');
-      const uploadError = req.query.error === 'daily_limit'
-        ? `Daily upload limit reached (${DAILY_UPLOAD_LIMIT} posts). Try again tomorrow.`
-        : null;
-      res.render('index', {
-        entries: rows,
-        userId: req.session.userId,
-        canRegister: (countRow?.c || 0) === 0,
-        uploadError
-      });
+app.get('/', async (req, res) => {
+  try {
+    const rows = await dbAllAsync('SELECT * FROM entries ORDER BY created_at DESC');
+    const countRow = await dbGetAsync('SELECT COUNT(*) AS c FROM users');
+    const ids = rows.map((row) => row.id);
+    const entriesById = Object.fromEntries(rows.map((row) => [row.id, row]));
+    const imagesMap = await getEntryImagesMap(ids, entriesById);
+    const entries = rows.map((row) => ({ ...row, images: imagesMap[row.id] || [] }));
+
+    const uploadError = req.query.error === 'daily_limit'
+      ? `Daily upload limit reached (${DAILY_UPLOAD_LIMIT} posts). Try again tomorrow.`
+      : null;
+
+    res.render('index', {
+      entries,
+      userId: req.session.userId,
+      canRegister: (countRow?.c || 0) === 0,
+      uploadError,
+      maxImagesPerPost: MAX_IMAGES_PER_POST
     });
-  });
+  } catch (err) {
+    console.error(err);
+    res.status(500).send('DB error');
+  }
 });
 
-app.post('/upload', ensureAuth, upload.single('photo'), async (req, res) => {
+app.post('/upload', ensureAuth, upload.array('photos', MAX_IMAGES_PER_POST), async (req, res) => {
   const note = req.body.note || '';
-  const file = req.file || null;
-  let storedKey = null;
+  const files = Array.isArray(req.files) ? req.files : [];
+  const storedFiles = [];
 
   try {
     const { startMs, endMs } = getDayRangeMs();
@@ -179,130 +293,187 @@ app.post('/upload', ensureAuth, upload.single('photo'), async (req, res) => {
       return res.redirect('/?error=daily_limit');
     }
 
-    if (file) {
+    for (const file of files) {
       const stored = await storeUploadedFile(file);
-      storedKey = stored.key;
+      storedFiles.push(stored);
     }
 
-    const stmt = db.prepare('INSERT INTO entries(filename, originalname, note, created_at) VALUES (?,?,?,?)');
-    stmt.run(storedKey, file ? file.originalname : null, note, Date.now(), (err) => {
-      stmt.finalize();
-      if (err) return res.status(500).send('DB insert error');
-      res.redirect('/');
-    });
+    const first = storedFiles[0] || null;
+    const createdAt = Date.now();
+    const insertResult = await dbRunAsync(
+      'INSERT INTO entries(filename, originalname, note, created_at) VALUES (?,?,?,?)',
+      [first ? first.key : null, first ? first.originalname : null, note, createdAt]
+    );
+
+    for (let i = 0; i < storedFiles.length; i += 1) {
+      const item = storedFiles[i];
+      await dbRunAsync(
+        'INSERT INTO entry_images(entry_id, filename, originalname, sort_order) VALUES (?,?,?,?)',
+        [insertResult.lastID, item.key, item.originalname, i]
+      );
+    }
+
+    res.redirect('/');
   } catch (err) {
     console.error(err);
+    await Promise.allSettled(storedFiles.map((item) => deleteStoredFile(item.key)));
     res.status(500).send('Upload error');
   }
 });
 
-app.get('/entries/:id/edit', ensureAuth, (req, res) => {
+app.get('/entries/:id', async (req, res) => {
   const entryId = Number.parseInt(req.params.id, 10);
   if (!Number.isInteger(entryId) || entryId <= 0) {
     return res.status(400).send('Invalid entry id');
   }
 
-  db.get('SELECT * FROM entries WHERE id = ?', [entryId], (err, row) => {
-    if (err) return res.status(500).send('DB error');
+  try {
+    const row = await dbGetAsync('SELECT * FROM entries WHERE id = ?', [entryId]);
     if (!row) return res.status(404).send('Entry not found');
-    res.render('edit', { entry: row, error: null });
-  });
+    const images = await getEntryImagesForEntry(entryId, row);
+    res.render('entry', { entry: { ...row, images }, userId: req.session.userId });
+  } catch (err) {
+    console.error(err);
+    res.status(500).send('DB error');
+  }
 });
 
-app.post('/entries/:id/edit', ensureAuth, upload.single('photo'), async (req, res) => {
+app.get('/entries/:id/edit', ensureAuth, async (req, res) => {
+  const entryId = Number.parseInt(req.params.id, 10);
+  if (!Number.isInteger(entryId) || entryId <= 0) {
+    return res.status(400).send('Invalid entry id');
+  }
+
+  try {
+    const row = await dbGetAsync('SELECT * FROM entries WHERE id = ?', [entryId]);
+    if (!row) return res.status(404).send('Entry not found');
+    const images = await getEntryImagesForEntry(entryId, row);
+    res.render('edit', { entry: { ...row, images }, error: null, maxImagesPerPost: MAX_IMAGES_PER_POST });
+  } catch (err) {
+    console.error(err);
+    res.status(500).send('DB error');
+  }
+});
+
+app.post('/entries/:id/edit', ensureAuth, upload.array('photos', MAX_IMAGES_PER_POST), async (req, res) => {
   const entryId = Number.parseInt(req.params.id, 10);
   if (!Number.isInteger(entryId) || entryId <= 0) {
     return res.status(400).send('Invalid entry id');
   }
 
   const note = req.body.note || '';
-  const removePhoto = req.body.removePhoto === 'on';
-  const newFile = req.file || null;
+  const removeAllPhotos = req.body.removeAllPhotos === 'on';
+  const removeImageIdsRaw = req.body.removeImageIds;
+  const removeImageIds = new Set(
+    (Array.isArray(removeImageIdsRaw) ? removeImageIdsRaw : [removeImageIdsRaw])
+      .map((value) => Number.parseInt(value, 10))
+      .filter((value) => Number.isInteger(value) && value > 0)
+  );
+  const newFiles = Array.isArray(req.files) ? req.files : [];
+  const newlyStored = [];
 
-  db.get('SELECT * FROM entries WHERE id = ?', [entryId], async (fetchErr, row) => {
-    if (fetchErr) return res.status(500).send('DB error');
+  try {
+    const row = await dbGetAsync('SELECT * FROM entries WHERE id = ?', [entryId]);
     if (!row) return res.status(404).send('Entry not found');
 
-    let nextFilename = row.filename;
-    let nextOriginalname = row.originalname;
-    let newlyUploadedFilename = null;
+    const existingImages = await getEntryImagesForEntry(entryId, row);
+    const imagesToRemove = removeAllPhotos
+      ? existingImages
+      : existingImages.filter((image) => removeImageIds.has(image.id));
+    const retainedCount = existingImages.length - imagesToRemove.length;
+    if (retainedCount + newFiles.length > MAX_IMAGES_PER_POST) {
+      return res.status(400).render('edit', {
+        entry: { ...row, images: existingImages },
+        error: `You can store up to ${MAX_IMAGES_PER_POST} images in one post.`,
+        maxImagesPerPost: MAX_IMAGES_PER_POST
+      });
+    }
 
-    try {
-      if (newFile) {
-        const stored = await storeUploadedFile(newFile);
-        nextFilename = stored.key;
-        nextOriginalname = stored.originalname;
-        newlyUploadedFilename = stored.key;
+    for (const file of newFiles) {
+      const stored = await storeUploadedFile(file);
+      newlyStored.push(stored);
+    }
 
-        if (row.filename) {
-          try {
-            await deleteStoredFile(row.filename);
-          } catch (fileErr) {
-            if (fileErr.code !== 'ENOENT' && fileErr.name !== 'NoSuchKey') {
-              console.error('File delete error:', fileErr);
-            }
-          }
-        }
-      } else if (removePhoto && row.filename) {
-        nextFilename = null;
-        nextOriginalname = null;
+    if (imagesToRemove.length > 0) {
+      if (removeAllPhotos) {
+        await dbRunAsync('DELETE FROM entry_images WHERE entry_id = ?', [entryId]);
+      } else {
+        const ids = imagesToRemove.map((image) => image.id);
+        const placeholders = ids.map(() => '?').join(',');
+        await dbRunAsync(
+          `DELETE FROM entry_images WHERE entry_id = ? AND id IN (${placeholders})`,
+          [entryId, ...ids]
+        );
+      }
+
+      for (const image of imagesToRemove) {
         try {
-          await deleteStoredFile(row.filename);
+          await deleteStoredFile(image.filename);
         } catch (fileErr) {
           if (fileErr.code !== 'ENOENT' && fileErr.name !== 'NoSuchKey') {
             console.error('File delete error:', fileErr);
           }
         }
       }
-
-      db.run(
-        'UPDATE entries SET filename = ?, originalname = ?, note = ? WHERE id = ?',
-        [nextFilename, nextOriginalname, note, entryId],
-        (updateErr) => {
-          if (updateErr) {
-            if (newlyUploadedFilename) {
-              deleteStoredFile(newlyUploadedFilename).catch((cleanupErr) => {
-                console.error('Uploaded file cleanup error:', cleanupErr);
-              });
-            }
-            return res.status(500).send('DB update error');
-          }
-          res.redirect('/');
-        }
-      );
-    } catch (err) {
-      console.error(err);
-      res.status(500).send('Edit error');
     }
-  });
+
+    const currentCountRow = await dbGetAsync('SELECT COUNT(*) AS c FROM entry_images WHERE entry_id = ?', [entryId]);
+    let nextSort = currentCountRow?.c || 0;
+    for (const item of newlyStored) {
+      await dbRunAsync(
+        'INSERT INTO entry_images(entry_id, filename, originalname, sort_order) VALUES (?,?,?,?)',
+        [entryId, item.key, item.originalname, nextSort]
+      );
+      nextSort += 1;
+    }
+
+    const firstImage = await dbGetAsync(
+      'SELECT filename, originalname FROM entry_images WHERE entry_id = ? ORDER BY sort_order, id LIMIT 1',
+      [entryId]
+    );
+
+    await dbRunAsync(
+      'UPDATE entries SET filename = ?, originalname = ?, note = ? WHERE id = ?',
+      [firstImage ? firstImage.filename : null, firstImage ? firstImage.originalname : null, note, entryId]
+    );
+
+    res.redirect(`/entries/${entryId}`);
+  } catch (err) {
+    console.error(err);
+    await Promise.allSettled(newlyStored.map((item) => deleteStoredFile(item.key)));
+    res.status(500).send('Edit error');
+  }
 });
 
-app.post('/entries/:id/delete', ensureAuth, (req, res) => {
+app.post('/entries/:id/delete', ensureAuth, async (req, res) => {
   const entryId = Number.parseInt(req.params.id, 10);
   if (!Number.isInteger(entryId) || entryId <= 0) {
     return res.status(400).send('Invalid entry id');
   }
 
-  db.get('SELECT filename FROM entries WHERE id = ?', [entryId], (fetchErr, row) => {
-    if (fetchErr) return res.status(500).send('DB error');
+  try {
+    const row = await dbGetAsync('SELECT * FROM entries WHERE id = ?', [entryId]);
     if (!row) return res.redirect('/');
 
-    db.run('DELETE FROM entries WHERE id = ?', [entryId], async (deleteErr) => {
-      if (deleteErr) return res.status(500).send('DB delete error');
+    const images = await getEntryImagesForEntry(entryId, row);
+    await dbRunAsync('DELETE FROM entry_images WHERE entry_id = ?', [entryId]);
+    await dbRunAsync('DELETE FROM entries WHERE id = ?', [entryId]);
 
-      if (row.filename) {
-        try {
-          await deleteStoredFile(row.filename);
-        } catch (fileErr) {
-          if (fileErr.code !== 'ENOENT' && fileErr.name !== 'NoSuchKey') {
-            console.error('File delete error:', fileErr);
-          }
+    for (const image of images) {
+      try {
+        await deleteStoredFile(image.filename);
+      } catch (fileErr) {
+        if (fileErr.code !== 'ENOENT' && fileErr.name !== 'NoSuchKey') {
+          console.error('File delete error:', fileErr);
         }
       }
+    }
 
-      res.redirect('/');
-    });
-  });
+    res.redirect('/');
+  } catch (err) {
+    console.error(err);
+    res.status(500).send('Delete error');
+  }
 });
 
 // Authentication routes
@@ -368,5 +539,16 @@ app.locals.fileUrl = function(filename) {
   if (!filename) return null;
   return buildFileUrl(filename);
 };
+
+app.use((err, req, res, next) => {
+  if (err instanceof multer.MulterError && err.code === 'LIMIT_FILE_COUNT') {
+    return res.status(400).send(`You can upload up to ${MAX_IMAGES_PER_POST} images per post.`);
+  }
+  if (err) {
+    console.error(err);
+    return res.status(500).send('Unexpected error');
+  }
+  return next();
+});
 
 app.listen(PORT, () => console.log(`Server running on http://localhost:${PORT}`));

@@ -1,0 +1,46 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Post Detail</title>
+    <link rel="stylesheet" href="/static/style.css" />
+  </head>
+  <body>
+    <div class="container">
+      <header class="detail-header">
+        <h1>Post Detail</h1>
+        <a href="/">Back</a>
+      </header>
+
+      <article class="entry detail-entry">
+        <% if (entry.images && entry.images.length) { %>
+          <section class="detail-gallery">
+            <% entry.images.forEach(function(img) { %>
+              <a class="detail-image-link" href="<%= fileUrl(img.filename) %>" data-lightbox>
+                <img src="<%= fileUrl(img.filename) %>" alt="photo" />
+              </a>
+            <% }) %>
+          </section>
+        <% } else { %>
+          <p>No images for this post.</p>
+        <% } %>
+
+        <div class="meta">
+          <div class="note"><%= entry.note ? entry.note : '(no note)' %></div>
+          <div class="time"><%= new Date(entry.created_at).toLocaleString() %></div>
+          <p class="detail-hint">Click image to view full size.</p>
+          <% if (userId) { %>
+            <div class="entry-actions">
+              <a class="edit-btn" href="/entries/<%= entry.id %>/edit">Edit</a>
+              <form class="delete-form" action="/entries/<%= entry.id %>/delete" method="post" onsubmit="return confirm('Delete this post?')">
+                <button class="delete-btn" type="submit">Delete</button>
+              </form>
+            </div>
+          <% } %>
+        </div>
+      </article>
+    </div>
+    <script src="/static/script.js"></script>
+  </body>
+</html>

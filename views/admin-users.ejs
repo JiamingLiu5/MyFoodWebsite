@@ -15,7 +15,10 @@
         </div>
         <nav class="top-nav">
           <a href="/">Home</a>
-          <a href="/logout">Logout</a>
+          <form class="top-nav-form" action="/logout" method="post">
+            <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
+            <button class="top-nav-btn" type="submit">Logout</button>
+          </form>
         </nav>
       </header>
 
@@ -57,6 +60,7 @@
                     <% if (user.id !== userId) { %>
                       <!-- Change role -->
                       <form class="inline-form" action="/admin/users/<%= user.id %>/role" method="post">
+                        <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
                         <input type="hidden" name="role" value="<%= user.role === 'admin' ? 'normal' : 'admin' %>" />
                         <button class="role-btn" type="submit">
                           <%= user.role === 'admin' ? 'Demote to Normal' : 'Promote to Admin' %>
@@ -65,6 +69,7 @@
 
                       <% if (user.role !== 'admin') { %>
                         <form class="inline-form" action="/admin/users/<%= user.id %>/pin-permission" method="post">
+                          <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
                           <input type="hidden" name="canPin" value="<%= hasExplicitPinRight ? 0 : 1 %>" />
                           <button class="perm-btn" type="submit">
                             <%= hasExplicitPinRight ? 'Revoke Pin Right' : 'Grant Pin Right' %>
@@ -76,6 +81,7 @@
 
                       <!-- Delete user -->
                       <form class="inline-form" action="/admin/users/<%= user.id %>/delete" method="post" onsubmit="return confirm('Delete user <%= user.username %>? All their posts will be deleted.')">
+                        <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
                         <button class="delete-btn" type="submit">Delete</button>
                       </form>
                     <% } else { %>

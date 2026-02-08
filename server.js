@@ -1,6 +1,7 @@
 require('dotenv').config();
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
 const express = require('express');
 const multer = require('multer');
 const sqlite3 = require('sqlite3').verbose();
@@ -15,12 +16,19 @@ try {
 }
 
 const app = express();
+app.disable('x-powered-by');
 const PORT = process.env.PORT || 3000;
 const UPLOADS_DIR = path.join(__dirname, 'uploads');
 const DB_PATH = process.env.DB_PATH || path.join(__dirname, 'data.db');
+const BODY_LIMIT = process.env.BODY_LIMIT || '256kb';
 const DAILY_UPLOAD_LIMIT = Math.max(1, Number.parseInt(process.env.DAILY_UPLOAD_LIMIT || '1000', 10));
 const DAILY_REGISTRATION_LIMIT = Math.max(1, Number.parseInt(process.env.DAILY_REGISTRATION_LIMIT || '200', 10));
 const MAX_IMAGES_PER_POST = Math.max(1, Number.parseInt(process.env.MAX_IMAGES_PER_POST || '10', 10));
+const MAX_UPLOAD_FILE_SIZE_MB = Math.max(1, Number.parseInt(process.env.MAX_UPLOAD_FILE_SIZE_MB || '10', 10));
+const MAX_UPLOAD_FILE_SIZE_BYTES = MAX_UPLOAD_FILE_SIZE_MB * 1024 * 1024;
+const AUTH_RATE_LIMIT_WINDOW_MINUTES = Math.max(1, Number.parseInt(process.env.AUTH_RATE_LIMIT_WINDOW_MINUTES || '15', 10));
+const AUTH_RATE_LIMIT_MAX_ATTEMPTS = Math.max(1, Number.parseInt(process.env.AUTH_RATE_LIMIT_MAX_ATTEMPTS || '25', 10));
+const AUTH_RATE_LIMIT_WINDOW_MS = AUTH_RATE_LIMIT_WINDOW_MINUTES * 60 * 1000;
 const TRUST_PROXY = process.env.TRUST_PROXY === 'true';
 const SESSION_COOKIE_SECURE = process.env.SESSION_COOKIE_SECURE === 'true';
 const SESSION_COOKIE_SAME_SITE = process.env.SESSION_COOKIE_SAME_SITE || 'lax';
@@ -53,7 +61,10 @@ if (TRUST_PROXY) {
 // Configure storage: we'll upload to Cloudflare R2 using S3-compatible API.
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { files: MAX_IMAGES_PER_POST }
+  limits: {
+    files: MAX_IMAGES_PER_POST,
+    fileSize: MAX_UPLOAD_FILE_SIZE_BYTES
+  }
 });
 
 // Setup view engine and static
@@ -61,7 +72,7 @@ app.set('view engine', 'ejs');
 app.set('views', path.join(__dirname, 'views'));
 app.use('/static', express.static(path.join(__dirname, 'public')));
 app.use('/uploads', express.static(UPLOADS_DIR));
-app.use(express.urlencoded({ extended: true }));
+app.use(express.urlencoded({ extended: true, limit: BODY_LIMIT }));
 
 // Sessions (simple memory store for dev)
 app.use(session({
@@ -74,6 +85,78 @@ app.use(session({
     httpOnly: true
   }
 }));
+
+// Basic HTTP security headers.
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+  res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
+  if (req.secure || SESSION_COOKIE_SECURE) {
+    res.setHeader('Strict-Transport-Security', 'max-age=15552000; includeSubDomains');
+  }
+  next();
+});
+
+function ensureSessionCsrfToken(req) {
+  if (!req.session) return '';
+  if (!req.session.csrfToken) {
+    req.session.csrfToken = crypto.randomBytes(32).toString('hex');
+  }
+  return req.session.csrfToken;
+}
+
+function verifyCsrfToken(req, res, next) {
+  const expected = req.session ? req.session.csrfToken : '';
+  const provided = String(
+    (req.body && req.body._csrf) ||
+    req.get('x-csrf-token') ||
+    ''
+  );
+
+  if (!expected || !provided || provided !== expected) {
+    return res.status(403).send('Invalid CSRF token');
+  }
+  return next();
+}
+
+// Expose CSRF token to all templates.
+app.use((req, res, next) => {
+  res.locals.csrfToken = ensureSessionCsrfToken(req);
+  next();
+});
+
+const authRateLimitBuckets = new Map();
+
+function makeAuthRateLimiter(scope) {
+  return (req, res, next) => {
+    const now = Date.now();
+    if (authRateLimitBuckets.size > 5000) {
+      for (const [bucketKey, bucketValue] of authRateLimitBuckets.entries()) {
+        if (bucketValue.resetAt <= now) authRateLimitBuckets.delete(bucketKey);
+      }
+    }
+    const ip = req.ip || req.socket?.remoteAddress || 'unknown';
+    const key = `${scope}:${ip}`;
+    const current = authRateLimitBuckets.get(key);
+
+    if (!current || current.resetAt <= now) {
+      authRateLimitBuckets.set(key, { count: 1, resetAt: now + AUTH_RATE_LIMIT_WINDOW_MS });
+      return next();
+    }
+
+    if (current.count >= AUTH_RATE_LIMIT_MAX_ATTEMPTS) {
+      const retryAfterSeconds = Math.max(1, Math.ceil((current.resetAt - now) / 1000));
+      res.setHeader('Retry-After', String(retryAfterSeconds));
+      return res.status(429).send('Too many attempts. Please try again later.');
+    }
+
+    current.count += 1;
+    authRateLimitBuckets.set(key, current);
+    return next();
+  };
+}
 
 // Attach user role/permissions to request for authorization checks
 app.use(async (req, res, next) => {
@@ -175,10 +258,17 @@ db.serialize(() => {
     created_at INTEGER NOT NULL
   )`);
   db.run('CREATE INDEX IF NOT EXISTS idx_pending_registrations_expires ON pending_registrations(code_expires_at)');
-  db.run('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_unique ON users(email) WHERE email IS NOT NULL');
   // Migration: Add role column to users table
   db.all('PRAGMA table_info(users)', (pragmaErr, cols) => {
     if (pragmaErr) return console.error('PRAGMA users error:', pragmaErr);
+    const ensureUsersEmailIndex = () => {
+      db.run(
+        'CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_unique ON users(email) WHERE email IS NOT NULL',
+        (indexErr) => {
+          if (indexErr) console.error('users email index migration error:', indexErr);
+        }
+      );
+    };
     const hasRole = Array.isArray(cols) && cols.some((col) => col.name === 'role');
     if (!hasRole) {
       db.run('ALTER TABLE users ADD COLUMN role TEXT DEFAULT "normal"', (alterErr) => {
@@ -195,8 +285,13 @@ db.serialize(() => {
     if (!hasEmail) {
       db.run('ALTER TABLE users ADD COLUMN email TEXT', (alterErr) => {
         if (alterErr) console.error('users email migration error:', alterErr);
-        else console.log('✓ Added email column to users');
+        else {
+          console.log('✓ Added email column to users');
+          ensureUsersEmailIndex();
+        }
       });
+    } else {
+      ensureUsersEmailIndex();
     }
     const hasEmailVerifiedAt = Array.isArray(cols) && cols.some((col) => col.name === 'email_verified_at');
     if (!hasEmailVerifiedAt) {
@@ -546,7 +641,7 @@ app.get('/', async (req, res) => {
   }
 });
 
-app.post('/upload', ensureAuth, upload.array('photos', MAX_IMAGES_PER_POST), async (req, res) => {
+app.post('/upload', ensureAuth, upload.array('photos', MAX_IMAGES_PER_POST), verifyCsrfToken, async (req, res) => {
   const note = req.body.note || '';
   const files = Array.isArray(req.files) ? req.files : [];
   const storedFiles = [];
@@ -622,7 +717,7 @@ app.get('/entries/:id', async (req, res) => {
   }
 });
 
-app.post('/entries/:id/pin', ensureCanPin, async (req, res) => {
+app.post('/entries/:id/pin', ensureCanPin, verifyCsrfToken, async (req, res) => {
   const entryId = Number.parseInt(req.params.id, 10);
   if (!Number.isInteger(entryId) || entryId <= 0) {
     return res.status(400).send('Invalid entry id');
@@ -661,7 +756,7 @@ app.get('/entries/:id/edit', ensureOwnerOrAdmin, async (req, res) => {
   }
 });
 
-app.post('/entries/:id/edit', ensureOwnerOrAdmin, upload.array('photos', MAX_IMAGES_PER_POST), async (req, res) => {
+app.post('/entries/:id/edit', ensureOwnerOrAdmin, upload.array('photos', MAX_IMAGES_PER_POST), verifyCsrfToken, async (req, res) => {
   const entryId = Number.parseInt(req.params.id, 10);
   if (!Number.isInteger(entryId) || entryId <= 0) {
     return res.status(400).send('Invalid entry id');
@@ -751,7 +846,7 @@ app.post('/entries/:id/edit', ensureOwnerOrAdmin, upload.array('photos', MAX_IMA
   }
 });
 
-app.post('/entries/:id/delete', ensureOwnerOrAdmin, async (req, res) => {
+app.post('/entries/:id/delete', ensureOwnerOrAdmin, verifyCsrfToken, async (req, res) => {
   const entryId = Number.parseInt(req.params.id, 10);
   if (!Number.isInteger(entryId) || entryId <= 0) {
     return res.status(400).send('Invalid entry id');
@@ -793,7 +888,7 @@ app.get('/admin/users', ensureAdmin, async (req, res) => {
   }
 });
 
-app.post('/admin/users/:id/role', ensureAdmin, async (req, res) => {
+app.post('/admin/users/:id/role', ensureAdmin, verifyCsrfToken, async (req, res) => {
   const targetUserId = Number.parseInt(req.params.id, 10);
   const newRole = req.body.role;
 
@@ -828,7 +923,7 @@ app.post('/admin/users/:id/role', ensureAdmin, async (req, res) => {
   }
 });
 
-app.post('/admin/users/:id/pin-permission', ensureAdmin, async (req, res) => {
+app.post('/admin/users/:id/pin-permission', ensureAdmin, verifyCsrfToken, async (req, res) => {
   const targetUserId = Number.parseInt(req.params.id, 10);
   const canPin = String(req.body.canPin || '').trim() === '1' ? 1 : 0;
 
@@ -856,7 +951,7 @@ app.post('/admin/users/:id/pin-permission', ensureAdmin, async (req, res) => {
   }
 });
 
-app.post('/admin/users/:id/delete', ensureAdmin, async (req, res) => {
+app.post('/admin/users/:id/delete', ensureAdmin, verifyCsrfToken, async (req, res) => {
   const targetUserId = Number.parseInt(req.params.id, 10);
 
   if (!Number.isInteger(targetUserId) || targetUserId <= 0) {
@@ -907,7 +1002,7 @@ app.get('/login', (req, res) => {
   res.render('login', { error: null });
 });
 
-app.post('/login', (req, res) => {
+app.post('/login', makeAuthRateLimiter('login'), verifyCsrfToken, (req, res) => {
   const username = (req.body.username || '').trim();
   const password = req.body.password || '';
   if (!username || !password) {
@@ -925,8 +1020,13 @@ app.post('/login', (req, res) => {
   });
 });
 
-app.get('/logout', (req, res) => {
+app.post('/logout', verifyCsrfToken, (req, res) => {
   req.session.destroy(() => res.redirect('/'));
+});
+
+// Keep GET /logout side-effect free.
+app.get('/logout', (req, res) => {
+  res.redirect('/');
 });
 
 // Registration with email confirmation code:
@@ -952,7 +1052,7 @@ app.get('/register', async (req, res) => {
   }
 });
 
-app.post('/register', async (req, res) => {
+app.post('/register', makeAuthRateLimiter('register'), verifyCsrfToken, async (req, res) => {
   const username = (req.body.username || '').trim();
   const email = normalizeEmail(req.body.email);
   const password = req.body.password || '';
@@ -1081,7 +1181,7 @@ app.get('/register/verify', async (req, res) => {
   }
 });
 
-app.post('/register/resend', async (req, res) => {
+app.post('/register/resend', makeAuthRateLimiter('register_resend'), verifyCsrfToken, async (req, res) => {
   if (req.session && req.session.userId) return res.redirect('/');
   const username = (req.body.username || req.session.pendingRegistrationUsername || '').trim();
   if (!username) return res.redirect('/register');
@@ -1123,7 +1223,7 @@ app.post('/register/resend', async (req, res) => {
   }
 });
 
-app.post('/register/verify', async (req, res) => {
+app.post('/register/verify', makeAuthRateLimiter('register_verify'), verifyCsrfToken, async (req, res) => {
   if (req.session && req.session.userId) return res.redirect('/');
   const username = (req.body.username || req.session.pendingRegistrationUsername || '').trim();
   const code = String(req.body.code || '').trim();
@@ -1225,6 +1325,9 @@ app.locals.fileUrl = function(filename) {
 app.use((err, req, res, next) => {
   if (err instanceof multer.MulterError && err.code === 'LIMIT_FILE_COUNT') {
     return res.status(400).send(`You can upload up to ${MAX_IMAGES_PER_POST} images per post.`);
+  }
+  if (err instanceof multer.MulterError && err.code === 'LIMIT_FILE_SIZE') {
+    return res.status(400).send(`Each image must be ${MAX_UPLOAD_FILE_SIZE_MB}MB or smaller.`);
   }
   if (err) {
     console.error(err);

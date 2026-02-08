@@ -113,6 +113,22 @@ a:hover{color:#0f5078}
   color:var(--secondary);
 }
 
+.top-nav-form{margin:0}
+
+.top-nav-btn{
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  padding:8px 12px;
+  border:1px solid var(--line);
+  border-radius:999px;
+  background:var(--surface-strong);
+  color:var(--secondary);
+  font:inherit;
+  font-weight:600;
+  cursor:pointer;
+}
+
 .status-note{margin:0 0 12px;color:var(--muted);font-size:16px}
 
 .upload-form,

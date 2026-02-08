@@ -39,12 +39,14 @@
           <% if (userRole === 'admin') { %>
             <div class="entry-actions">
               <form class="pin-form" action="/entries/<%= entry.id %>/pin" method="post">
+                <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
                 <input type="hidden" name="pinned" value="<%= entry.is_pinned ? 0 : 1 %>" />
                 <input type="hidden" name="returnTo" value="/entries/<%= entry.id %>" />
                 <button class="pin-btn" type="submit"><%= entry.is_pinned ? 'Unpin' : 'Pin' %></button>
               </form>
               <a class="edit-btn" href="/entries/<%= entry.id %>/edit">Edit</a>
               <form class="delete-form" action="/entries/<%= entry.id %>/delete" method="post" onsubmit="return confirm('Delete this post?')">
+                <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
                 <button class="delete-btn" type="submit">Delete</button>
               </form>
             </div>
@@ -52,6 +54,7 @@
             <div class="entry-actions">
               <% if (userCanPin) { %>
                 <form class="pin-form" action="/entries/<%= entry.id %>/pin" method="post">
+                  <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
                   <input type="hidden" name="pinned" value="<%= entry.is_pinned ? 0 : 1 %>" />
                   <input type="hidden" name="returnTo" value="/entries/<%= entry.id %>" />
                   <button class="pin-btn" type="submit"><%= entry.is_pinned ? 'Unpin' : 'Pin' %></button>
@@ -60,6 +63,7 @@
               <% if (userId && entry.user_id === userId) { %>
                 <a class="edit-btn" href="/entries/<%= entry.id %>/edit">Edit</a>
                 <form class="delete-form" action="/entries/<%= entry.id %>/delete" method="post" onsubmit="return confirm('Delete this post?')">
+                  <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
                   <button class="delete-btn" type="submit">Delete</button>
                 </form>
               <% } %>

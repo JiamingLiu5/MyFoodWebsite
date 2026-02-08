@@ -10,6 +10,7 @@ Post features:
 - Pin/unpin posts (pinned posts stay at top for logged-in users).
 - Admin can grant non-admin users a separate pin permission.
 - Public visitors (not logged in) can only see and view pinned posts.
+- Security hardening: CSRF protection for all form POSTs, auth route rate limits, stricter security headers.
 
 Storage behavior:
 
@@ -101,6 +102,10 @@ Environment variables:
 - `DAILY_UPLOAD_LIMIT` — max number of posts per day (default `1000`)
 - `DAILY_REGISTRATION_LIMIT` — max number of new users per day (default `200`)
 - `MAX_IMAGES_PER_POST` — max images allowed in one post (default `10`)
+- `MAX_UPLOAD_FILE_SIZE_MB` — max size per uploaded image in MB (default `10`)
+- `BODY_LIMIT` — max URL-encoded body size (default `256kb`)
+- `AUTH_RATE_LIMIT_WINDOW_MINUTES` — auth brute-force window size (default `15`)
+- `AUTH_RATE_LIMIT_MAX_ATTEMPTS` — max auth attempts per IP per window (default `25`)
 
 Example run (local env):
 
@@ -117,6 +122,9 @@ export SMTP_SECURE="false"
 export SMTP_USER="smtp-user"
 export SMTP_PASS="smtp-pass"
 export SMTP_FROM="no-reply@ldnmeals.com"
+export MAX_UPLOAD_FILE_SIZE_MB="10"
+export AUTH_RATE_LIMIT_WINDOW_MINUTES="15"
+export AUTH_RATE_LIMIT_MAX_ATTEMPTS="25"
 npm start
 ```
 

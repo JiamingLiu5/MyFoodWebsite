@@ -25,6 +25,7 @@
       <% } %>
 
       <form class="auth-form" action="/register/verify" method="post">
+        <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
         <label>Username</label>
         <input name="username" value="<%= username %>" required />
         <label>Confirmation Code</label>
@@ -34,6 +35,7 @@
 
       <div class="auth-secondary-actions">
         <form class="inline-form" action="/register/resend" method="post">
+          <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
           <input type="hidden" name="username" value="<%= username %>" />
           <button class="view-btn" type="submit">Resend Code</button>
         </form>

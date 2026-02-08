@@ -15,6 +15,7 @@
         <p class="upload-error"><%= error %></p>
       <% } %>
       <form class="auth-form" action="/login" method="post">
+        <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
         <label>Username</label>
         <input name="username" required />
         <label>Password</label>

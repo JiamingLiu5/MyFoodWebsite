@@ -11,7 +11,11 @@
       <header class="page-header simple">
         <h1 class="brand-title">Register</h1>
       </header>
-      <p class="status-note">Create the first account for this website.</p>
+      <% if (typeof isFirstUser !== 'undefined' && isFirstUser) { %>
+        <p class="info-note">You will be registered as the <strong>admin</strong> with full access.</p>
+      <% } else { %>
+        <p class="info-note">You will be registered as a <strong>normal user</strong>. You can create and manage your own posts, and view pinned content from others.</p>
+      <% } %>
       <% if (error) { %>
         <p class="upload-error"><%= error %></p>
       <% } %>

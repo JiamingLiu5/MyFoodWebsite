@@ -56,6 +56,26 @@ app.use(session({
   }
 }));
 
+// Attach user role to request for authorization checks
+app.use(async (req, res, next) => {
+  if (req.session && req.session.userId) {
+    // Use session cache if available
+    if (req.session.userRole) {
+      req.userRole = req.session.userRole;
+    } else {
+      // Fetch from DB and cache in session
+      const user = await dbGetAsync('SELECT role FROM users WHERE id = ?', [req.session.userId]);
+      req.userRole = user ? user.role : null;
+      if (req.userRole) req.session.userRole = req.userRole;
+    }
+    res.locals.userRole = req.userRole; // Make available to views
+  } else {
+    req.userRole = null;
+    res.locals.userRole = null;
+  }
+  next();
+});
+
 // DB
 const db = new sqlite3.Database(DB_PATH);
 db.serialize(() => {
@@ -73,6 +93,21 @@ db.serialize(() => {
     if (!hasPinned) {
       db.run('ALTER TABLE entries ADD COLUMN is_pinned INTEGER DEFAULT 0', (alterErr) => {
         if (alterErr) console.error('entries migration error:', alterErr);
+      });
+    }
+    // Migration: Add user_id column to entries table
+    const hasUserId = Array.isArray(cols) && cols.some((col) => col.name === 'user_id');
+    if (!hasUserId) {
+      db.run('ALTER TABLE entries ADD COLUMN user_id INTEGER', (alterErr) => {
+        if (alterErr) return console.error('entries user_id migration error:', alterErr);
+        console.log('✓ Added user_id column to entries');
+        // Set existing entries to first user (id=1)
+        db.run('UPDATE entries SET user_id = 1 WHERE user_id IS NULL', (updateErr) => {
+          if (updateErr) console.error('entries user_id backfill error:', updateErr);
+          else console.log('✓ Backfilled existing entries to user_id = 1');
+        });
+        // Create index for faster queries
+        db.run('CREATE INDEX IF NOT EXISTS idx_entries_user_id ON entries(user_id)');
       });
     }
   });
@@ -99,6 +134,22 @@ db.serialize(() => {
     username TEXT UNIQUE,
     password_hash TEXT
   )`);
+  // Migration: Add role column to users table
+  db.all('PRAGMA table_info(users)', (pragmaErr, cols) => {
+    if (pragmaErr) return console.error('PRAGMA users error:', pragmaErr);
+    const hasRole = Array.isArray(cols) && cols.some((col) => col.name === 'role');
+    if (!hasRole) {
+      db.run('ALTER TABLE users ADD COLUMN role TEXT DEFAULT "normal"', (alterErr) => {
+        if (alterErr) return console.error('users role migration error:', alterErr);
+        console.log('✓ Added role column to users');
+        // Set first user to admin
+        db.run('UPDATE users SET role = "admin" WHERE id = 1', (updateErr) => {
+          if (updateErr) console.error('users role update error:', updateErr);
+          else console.log('✓ First user set to admin role');
+        });
+      });
+    }
+  });
 });
 
 // Configure S3 client for R2
@@ -244,6 +295,29 @@ function ensureAuth(req, res, next) {
   res.redirect('/login');
 }
 
+// New ensureAdmin - for admin-only routes
+async function ensureAdmin(req, res, next) {
+  if (!req.session || !req.session.userId) return res.redirect('/login');
+  if (req.userRole !== 'admin') return res.status(403).send('Admin access required');
+  return next();
+}
+
+// Check if user owns the resource or is admin
+async function ensureOwnerOrAdmin(req, res, next) {
+  if (!req.session || !req.session.userId) return res.redirect('/login');
+
+  const entryId = req.params.id;
+  const entry = await dbGetAsync('SELECT user_id FROM entries WHERE id = ?', [entryId]);
+
+  if (!entry) return res.status(404).send('Entry not found');
+
+  const isOwner = entry.user_id === req.session.userId;
+  const isAdmin = req.userRole === 'admin';
+
+  if (isOwner || isAdmin) return next();
+  return res.status(403).send('You can only edit your own posts');
+}
+
 function getDayRangeMs(date = new Date()) {
   const start = new Date(date);
   start.setHours(0, 0, 0, 0);
@@ -267,10 +341,28 @@ function getEntryCountInRange(startMs, endMs) {
 
 app.get('/', async (req, res) => {
   try {
-    const isAuthenticated = Boolean(req.session.userId);
-    const rows = isAuthenticated
-      ? await dbAllAsync('SELECT * FROM entries ORDER BY COALESCE(is_pinned, 0) DESC, created_at DESC')
-      : await dbAllAsync('SELECT * FROM entries WHERE COALESCE(is_pinned, 0) = 1 ORDER BY created_at DESC');
+    const isAdmin = req.userRole === 'admin';
+    const userId = req.session.userId;
+
+    let rows;
+    if (isAdmin) {
+      // Admins see all posts
+      rows = await dbAllAsync(
+        'SELECT * FROM entries ORDER BY COALESCE(is_pinned, 0) DESC, created_at DESC'
+      );
+    } else if (userId) {
+      // Normal users see: pinned posts OR their own posts
+      rows = await dbAllAsync(
+        'SELECT * FROM entries WHERE COALESCE(is_pinned, 0) = 1 OR user_id = ? ORDER BY COALESCE(is_pinned, 0) DESC, created_at DESC',
+        [userId]
+      );
+    } else {
+      // Non-authenticated users see only pinned posts
+      rows = await dbAllAsync(
+        'SELECT * FROM entries WHERE COALESCE(is_pinned, 0) = 1 ORDER BY created_at DESC'
+      );
+    }
+
     const countRow = await dbGetAsync('SELECT COUNT(*) AS c FROM users');
     const ids = rows.map((row) => row.id);
     const entriesById = Object.fromEntries(rows.map((row) => [row.id, row]));
@@ -284,10 +376,11 @@ app.get('/', async (req, res) => {
     res.render('index', {
       entries,
       userId: req.session.userId,
-      canRegister: (countRow?.c || 0) === 0,
+      userRole: req.userRole,
+      canRegister: true, // Always allow registration now
       uploadError,
       maxImagesPerPost: MAX_IMAGES_PER_POST,
-      showPinnedOnly: !isAuthenticated
+      showPinnedOnly: !isAdmin
     });
   } catch (err) {
     console.error(err);
@@ -315,8 +408,8 @@ app.post('/upload', ensureAuth, upload.array('photos', MAX_IMAGES_PER_POST), asy
     const first = storedFiles[0] || null;
     const createdAt = Date.now();
     const insertResult = await dbRunAsync(
-      'INSERT INTO entries(filename, originalname, note, is_pinned, created_at) VALUES (?,?,?,?,?)',
-      [first ? first.key : null, first ? first.originalname : null, note, 0, createdAt]
+      'INSERT INTO entries(filename, originalname, note, is_pinned, created_at, user_id) VALUES (?,?,?,?,?,?)',
+      [first ? first.key : null, first ? first.originalname : null, note, 0, createdAt, req.session.userId]
     );
 
     for (let i = 0; i < storedFiles.length; i += 1) {
@@ -344,18 +437,29 @@ app.get('/entries/:id', async (req, res) => {
   try {
     const row = await dbGetAsync('SELECT * FROM entries WHERE id = ?', [entryId]);
     if (!row) return res.status(404).send('Entry not found');
-    if (!req.session.userId && Number(row.is_pinned || 0) !== 1) {
+
+    const isAdmin = req.userRole === 'admin';
+    const isPinned = Number(row.is_pinned || 0) === 1;
+    const isOwner = req.session.userId === row.user_id;
+
+    // Can view if: admin, pinned, or owner
+    if (!isAdmin && !isPinned && !isOwner) {
       return res.redirect('/login');
     }
+
     const images = await getEntryImagesForEntry(entryId, row);
-    res.render('entry', { entry: { ...row, images }, userId: req.session.userId });
+    res.render('entry', {
+      entry: { ...row, images },
+      userId: req.session.userId,
+      userRole: req.userRole
+    });
   } catch (err) {
     console.error(err);
     res.status(500).send('DB error');
   }
 });
 
-app.post('/entries/:id/pin', ensureAuth, async (req, res) => {
+app.post('/entries/:id/pin', ensureAdmin, async (req, res) => {
   const entryId = Number.parseInt(req.params.id, 10);
   if (!Number.isInteger(entryId) || entryId <= 0) {
     return res.status(400).send('Invalid entry id');
@@ -377,7 +481,7 @@ app.post('/entries/:id/pin', ensureAuth, async (req, res) => {
   }
 });
 
-app.get('/entries/:id/edit', ensureAuth, async (req, res) => {
+app.get('/entries/:id/edit', ensureOwnerOrAdmin, async (req, res) => {
   const entryId = Number.parseInt(req.params.id, 10);
   if (!Number.isInteger(entryId) || entryId <= 0) {
     return res.status(400).send('Invalid entry id');
@@ -394,7 +498,7 @@ app.get('/entries/:id/edit', ensureAuth, async (req, res) => {
   }
 });
 
-app.post('/entries/:id/edit', ensureAuth, upload.array('photos', MAX_IMAGES_PER_POST), async (req, res) => {
+app.post('/entries/:id/edit', ensureOwnerOrAdmin, upload.array('photos', MAX_IMAGES_PER_POST), async (req, res) => {
   const entryId = Number.parseInt(req.params.id, 10);
   if (!Number.isInteger(entryId) || entryId <= 0) {
     return res.status(400).send('Invalid entry id');
@@ -484,7 +588,7 @@ app.post('/entries/:id/edit', ensureAuth, upload.array('photos', MAX_IMAGES_PER_
   }
 });
 
-app.post('/entries/:id/delete', ensureAuth, async (req, res) => {
+app.post('/entries/:id/delete', ensureOwnerOrAdmin, async (req, res) => {
   const entryId = Number.parseInt(req.params.id, 10);
   if (!Number.isInteger(entryId) || entryId <= 0) {
     return res.status(400).send('Invalid entry id');
@@ -515,6 +619,97 @@ app.post('/entries/:id/delete', ensureAuth, async (req, res) => {
   }
 });
 
+// Admin: User Management routes
+app.get('/admin/users', ensureAdmin, async (req, res) => {
+  try {
+    const users = await dbAllAsync('SELECT id, username, role FROM users ORDER BY id ASC');
+    res.render('admin-users', { users, userId: req.session.userId, userRole: req.userRole });
+  } catch (err) {
+    console.error(err);
+    res.status(500).send('Error loading users');
+  }
+});
+
+app.post('/admin/users/:id/role', ensureAdmin, async (req, res) => {
+  const targetUserId = Number.parseInt(req.params.id, 10);
+  const newRole = req.body.role;
+
+  if (!Number.isInteger(targetUserId) || targetUserId <= 0) {
+    return res.status(400).send('Invalid user id');
+  }
+
+  if (newRole !== 'admin' && newRole !== 'normal') {
+    return res.status(400).send('Invalid role');
+  }
+
+  try {
+    // Check if trying to demote the last admin
+    if (newRole === 'normal') {
+      const adminCount = await dbGetAsync('SELECT COUNT(*) as c FROM users WHERE role = "admin"');
+      if (adminCount.c <= 1) {
+        return res.status(400).send('Cannot demote the last admin');
+      }
+    }
+
+    await dbRunAsync('UPDATE users SET role = ? WHERE id = ?', [newRole, targetUserId]);
+
+    // If updating current user's role, update session
+    if (targetUserId === req.session.userId) {
+      req.session.userRole = newRole;
+    }
+
+    res.redirect('/admin/users');
+  } catch (err) {
+    console.error(err);
+    res.status(500).send('Error updating user role');
+  }
+});
+
+app.post('/admin/users/:id/delete', ensureAdmin, async (req, res) => {
+  const targetUserId = Number.parseInt(req.params.id, 10);
+
+  if (!Number.isInteger(targetUserId) || targetUserId <= 0) {
+    return res.status(400).send('Invalid user id');
+  }
+
+  // Prevent deleting yourself
+  if (targetUserId === req.session.userId) {
+    return res.status(400).send('Cannot delete your own account');
+  }
+
+  try {
+    // Check if trying to delete the last admin
+    const user = await dbGetAsync('SELECT role FROM users WHERE id = ?', [targetUserId]);
+    if (!user) return res.status(404).send('User not found');
+
+    if (user.role === 'admin') {
+      const adminCount = await dbGetAsync('SELECT COUNT(*) as c FROM users WHERE role = "admin"');
+      if (adminCount.c <= 1) {
+        return res.status(400).send('Cannot delete the last admin');
+      }
+    }
+
+    // Delete user's entries and associated images
+    const entries = await dbAllAsync('SELECT id FROM entries WHERE user_id = ?', [targetUserId]);
+    for (const entry of entries) {
+      const images = await dbAllAsync('SELECT filename FROM entry_images WHERE entry_id = ?', [entry.id]);
+      for (const img of images) {
+        await deleteStoredFile(img.filename);
+      }
+      await dbRunAsync('DELETE FROM entry_images WHERE entry_id = ?', [entry.id]);
+    }
+    await dbRunAsync('DELETE FROM entries WHERE user_id = ?', [targetUserId]);
+
+    // Delete user
+    await dbRunAsync('DELETE FROM users WHERE id = ?', [targetUserId]);
+
+    res.redirect('/admin/users');
+  } catch (err) {
+    console.error(err);
+    res.status(500).send('Error deleting user');
+  }
+});
+
 // Authentication routes
 app.get('/login', (req, res) => {
   if (req.session && req.session.userId) return res.redirect('/');
@@ -533,6 +728,7 @@ app.post('/login', (req, res) => {
     if (!row) return res.render('login', { error: 'Invalid credentials' });
     if (!bcrypt.compareSync(password, row.password_hash)) return res.render('login', { error: 'Invalid credentials' });
     req.session.userId = row.id;
+    req.session.userRole = row.role;
     res.redirect('/');
   });
 });
@@ -541,13 +737,13 @@ app.get('/logout', (req, res) => {
   req.session.destroy(() => res.redirect('/'));
 });
 
-// Simple registration: only allowed when no users exist
+// Registration: first user becomes admin, subsequent users become normal users
 app.get('/register', (req, res) => {
   if (req.session && req.session.userId) return res.redirect('/');
   db.get('SELECT COUNT(*) as c FROM users', (err, row) => {
     if (err) return res.status(500).send('DB error');
-    if (row && row.c > 0) return res.status(403).send('Registration disabled');
-    res.render('register', { error: null });
+    const userCount = (row && row.c) || 0;
+    res.render('register', { error: null, isFirstUser: userCount === 0 });
   });
 });
 
@@ -560,16 +756,24 @@ app.post('/register', (req, res) => {
 
   db.get('SELECT COUNT(*) as c FROM users', (err, row) => {
     if (err) return res.status(500).send('DB error');
-    if (row && row.c > 0) return res.status(403).send('Registration disabled');
+
+    const isFirstUser = row.c === 0;
+    const role = isFirstUser ? 'admin' : 'normal';
     const hash = bcrypt.hashSync(password, 10);
-    db.run('INSERT INTO users(username, password_hash) VALUES (?, ?)', [username, hash], function(err) {
-      if (err && err.code === 'SQLITE_CONSTRAINT') {
-        return res.status(400).render('register', { error: 'Username already exists' });
+
+    db.run('INSERT INTO users(username, password_hash, role) VALUES (?, ?, ?)',
+      [username, hash, role],
+      function(err) {
+        if (err && err.code === 'SQLITE_CONSTRAINT') {
+          return res.status(400).render('register', { error: 'Username already exists' });
+        }
+        if (err) return res.status(500).send('DB insert error');
+
+        req.session.userId = this.lastID;
+        req.session.userRole = role;
+        res.redirect('/');
       }
-      if (err) return res.status(500).send('DB insert error');
-      req.session.userId = this.lastID;
-      res.redirect('/');
-    });
+    );
   });
 });
 

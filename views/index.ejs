@@ -15,17 +15,24 @@
         </div>
         <nav class="top-nav">
           <% if (userId) { %>
+            <span>Logged in as <strong><%= userRole %></strong></span>
+            <% if (userRole === 'admin') { %>
+              <a href="/admin/users">Manage Users</a>
+            <% } %>
             <a href="/logout">Logout</a>
           <% } else { %>
             <a href="/login">Login</a>
-            <% if (canRegister) { %>
-              <a href="/register">Register</a>
-            <% } %>
+            <a href="/register">Register</a>
           <% } %>
         </nav>
       </header>
 
       <% if (userId) { %>
+      <% if (userRole === 'admin') { %>
+        <p class="status-note"><em>Admin view: Showing all posts</em></p>
+      <% } else { %>
+        <p class="status-note"><em>Normal user: You can create posts and view pinned content</em></p>
+      <% } %>
       <form action="/upload" method="post" enctype="multipart/form-data" class="upload-form">
         <label>Photos (optional, up to <%= maxImagesPerPost %>)</label>
         <input type="file" name="photos" accept="image/*" multiple />
@@ -45,10 +52,7 @@
         <p class="upload-error"><%= uploadError %></p>
       <% } %>
       <% } else { %>
-        <p class="status-note"><em>Log in to upload photos and notes.</em></p>
-        <% if (showPinnedOnly) { %>
-          <p class="pinned-only-note"><strong>Public mode:</strong> only pinned posts are visible.</p>
-        <% } %>
+        <p class="status-note"><em>Viewing pinned posts only. <a href="/login">Login</a> or <a href="/register">register</a> to create posts.</em></p>
       <% } %>
 
       <section class="entries">
@@ -76,9 +80,10 @@
                 <% } %>
                 <div class="note"><%= e.note ? e.note : '(no note)' %></div>
                 <div class="time"><%= new Date(e.created_at).toLocaleString() %></div>
-                <% if (userId) { %>
-                  <div class="entry-actions">
-                    <a class="view-btn" href="/entries/<%= e.id %>">View</a>
+                <div class="entry-actions">
+                  <a class="view-btn" href="/entries/<%= e.id %>">View</a>
+                  <% if (userRole === 'admin') { %>
+                    <!-- Admin can do everything -->
                     <a class="edit-btn" href="/entries/<%= e.id %>/edit">Edit</a>
                     <form class="pin-form" action="/entries/<%= e.id %>/pin" method="post">
                       <input type="hidden" name="pinned" value="<%= e.is_pinned ? 0 : 1 %>" />
@@ -88,12 +93,14 @@
                     <form class="delete-form" action="/entries/<%= e.id %>/delete" method="post" onsubmit="return confirm('Delete this post?')">
                       <button class="delete-btn" type="submit">Delete</button>
                     </form>
-                  </div>
-                <% } else { %>
-                  <div class="entry-actions">
-                    <a class="view-btn" href="/entries/<%= e.id %>">View</a>
-                  </div>
-                <% } %>
+                  <% } else if (userId && e.user_id === userId) { %>
+                    <!-- Normal users can only edit/delete their own posts -->
+                    <a class="edit-btn" href="/entries/<%= e.id %>/edit">Edit</a>
+                    <form class="delete-form" action="/entries/<%= e.id %>/delete" method="post" onsubmit="return confirm('Delete this post?')">
+                      <button class="delete-btn" type="submit">Delete</button>
+                    </form>
+                  <% } %>
+                </div>
               </div>
             </article>
           <% }) %>

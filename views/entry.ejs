@@ -27,11 +27,19 @@
         <% } %>
 
         <div class="meta">
+          <% if (entry.is_pinned) { %>
+            <div class="pin-badge">Pinned</div>
+          <% } %>
           <div class="note"><%= entry.note ? entry.note : '(no note)' %></div>
           <div class="time"><%= new Date(entry.created_at).toLocaleString() %></div>
           <p class="detail-hint">Click image to view full size.</p>
           <% if (userId) { %>
             <div class="entry-actions">
+              <form class="pin-form" action="/entries/<%= entry.id %>/pin" method="post">
+                <input type="hidden" name="pinned" value="<%= entry.is_pinned ? 0 : 1 %>" />
+                <input type="hidden" name="returnTo" value="/entries/<%= entry.id %>" />
+                <button class="pin-btn" type="submit"><%= entry.is_pinned ? 'Unpin' : 'Pin' %></button>
+              </form>
               <a class="edit-btn" href="/entries/<%= entry.id %>/edit">Edit</a>
               <form class="delete-form" action="/entries/<%= entry.id %>/delete" method="post" onsubmit="return confirm('Delete this post?')">
                 <button class="delete-btn" type="submit">Delete</button>

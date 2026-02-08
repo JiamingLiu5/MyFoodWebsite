@@ -8,6 +8,7 @@ h1{margin-top:0}
 .upload-preview-meta{font-size:12px;color:#666;display:grid;gap:2px;word-break:break-word}
 .upload-preview-error{margin:0;color:#b02a37;font-size:13px}
 .upload-error{margin:0 0 10px;color:#b02a37;font-size:14px}
+.pinned-only-note{margin:0 0 12px;color:#666;font-size:14px}
 .upload-form textarea{width:100%;padding:8px;border-radius:4px;border:1px solid #ddd}
 .upload-form button{width:140px;padding:8px;border:none;background:#2b8aef;color:#fff;border-radius:6px}
 .entries{display:grid;grid-template-columns:repeat(auto-fit,minmax(440px,1fr));gap:12px}
@@ -21,12 +22,16 @@ h1{margin-top:0}
 .entry-images.is-multi img{height:170px;object-fit:cover}
 .entry-images-more{display:grid;place-items:center;height:170px;border-radius:4px;background:#111;color:#fff;font-size:24px}
 .meta{padding-top:8px;font-size:14px;color:#444}
+.pin-badge{display:inline-block;padding:2px 8px;border-radius:999px;background:#fff7db;color:#705500;font-size:12px;margin-bottom:8px;border:1px solid #f0de9a}
 .time{font-size:12px;color:#888;margin-top:6px}
 .entry-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px}
 .view-btn{display:inline-block;padding:6px 10px;border:1px solid #666;background:#fff;color:#333;border-radius:6px;text-decoration:none}
 .view-btn:hover{background:#f5f5f5}
 .edit-btn{display:inline-block;padding:6px 10px;border:1px solid #2b8aef;background:#fff;color:#2b8aef;border-radius:6px;text-decoration:none}
 .edit-btn:hover{background:#eef6ff}
+.pin-form{margin:0}
+.pin-btn{padding:6px 10px;border:1px solid #a97a00;background:#fff;color:#a97a00;border-radius:6px;cursor:pointer}
+.pin-btn:hover{background:#fff8e5}
 .delete-form{margin:0}
 .delete-btn{padding:6px 10px;border:1px solid #d9534f;background:#fff;color:#d9534f;border-radius:6px;cursor:pointer}
 .delete-btn:hover{background:#fff2f2}

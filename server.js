@@ -64,8 +64,18 @@ db.serialize(() => {
     filename TEXT,
     originalname TEXT,
     note TEXT,
+    is_pinned INTEGER DEFAULT 0,
     created_at INTEGER
   )`);
+  db.all('PRAGMA table_info(entries)', (pragmaErr, cols) => {
+    if (pragmaErr) return console.error('PRAGMA entries error:', pragmaErr);
+    const hasPinned = Array.isArray(cols) && cols.some((col) => col.name === 'is_pinned');
+    if (!hasPinned) {
+      db.run('ALTER TABLE entries ADD COLUMN is_pinned INTEGER DEFAULT 0', (alterErr) => {
+        if (alterErr) console.error('entries migration error:', alterErr);
+      });
+    }
+  });
   db.run(`CREATE TABLE IF NOT EXISTS entry_images (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     entry_id INTEGER NOT NULL,
@@ -257,7 +267,10 @@ function getEntryCountInRange(startMs, endMs) {
 
 app.get('/', async (req, res) => {
   try {
-    const rows = await dbAllAsync('SELECT * FROM entries ORDER BY created_at DESC');
+    const isAuthenticated = Boolean(req.session.userId);
+    const rows = isAuthenticated
+      ? await dbAllAsync('SELECT * FROM entries ORDER BY COALESCE(is_pinned, 0) DESC, created_at DESC')
+      : await dbAllAsync('SELECT * FROM entries WHERE COALESCE(is_pinned, 0) = 1 ORDER BY created_at DESC');
     const countRow = await dbGetAsync('SELECT COUNT(*) AS c FROM users');
     const ids = rows.map((row) => row.id);
     const entriesById = Object.fromEntries(rows.map((row) => [row.id, row]));
@@ -273,7 +286,8 @@ app.get('/', async (req, res) => {
       userId: req.session.userId,
       canRegister: (countRow?.c || 0) === 0,
       uploadError,
-      maxImagesPerPost: MAX_IMAGES_PER_POST
+      maxImagesPerPost: MAX_IMAGES_PER_POST,
+      showPinnedOnly: !isAuthenticated
     });
   } catch (err) {
     console.error(err);
@@ -301,8 +315,8 @@ app.post('/upload', ensureAuth, upload.array('photos', MAX_IMAGES_PER_POST), asy
     const first = storedFiles[0] || null;
     const createdAt = Date.now();
     const insertResult = await dbRunAsync(
-      'INSERT INTO entries(filename, originalname, note, created_at) VALUES (?,?,?,?)',
-      [first ? first.key : null, first ? first.originalname : null, note, createdAt]
+      'INSERT INTO entries(filename, originalname, note, is_pinned, created_at) VALUES (?,?,?,?,?)',
+      [first ? first.key : null, first ? first.originalname : null, note, 0, createdAt]
     );
 
     for (let i = 0; i < storedFiles.length; i += 1) {
@@ -330,11 +344,36 @@ app.get('/entries/:id', async (req, res) => {
   try {
     const row = await dbGetAsync('SELECT * FROM entries WHERE id = ?', [entryId]);
     if (!row) return res.status(404).send('Entry not found');
+    if (!req.session.userId && Number(row.is_pinned || 0) !== 1) {
+      return res.redirect('/login');
+    }
     const images = await getEntryImagesForEntry(entryId, row);
     res.render('entry', { entry: { ...row, images }, userId: req.session.userId });
   } catch (err) {
     console.error(err);
     res.status(500).send('DB error');
+  }
+});
+
+app.post('/entries/:id/pin', ensureAuth, async (req, res) => {
+  const entryId = Number.parseInt(req.params.id, 10);
+  if (!Number.isInteger(entryId) || entryId <= 0) {
+    return res.status(400).send('Invalid entry id');
+  }
+
+  const pinnedRaw = String(req.body.pinned || '').trim();
+  const pinned = pinnedRaw === '1' ? 1 : 0;
+
+  try {
+    const row = await dbGetAsync('SELECT id FROM entries WHERE id = ?', [entryId]);
+    if (!row) return res.status(404).send('Entry not found');
+    await dbRunAsync('UPDATE entries SET is_pinned = ? WHERE id = ?', [pinned, entryId]);
+    const returnToRaw = typeof req.body.returnTo === 'string' ? req.body.returnTo.trim() : '';
+    const returnTo = (returnToRaw === '/' || returnToRaw.startsWith('/entries/')) ? returnToRaw : '/';
+    res.redirect(returnTo);
+  } catch (err) {
+    console.error(err);
+    res.status(500).send('Pin update error');
   }
 });
 

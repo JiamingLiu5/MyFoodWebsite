@@ -7,6 +7,8 @@ Post features:
 - Multiple images per post (default max 10 per post).
 - Single-post detail page with full-size image viewer on click.
 - Edit and delete existing posts.
+- Pin/unpin posts (pinned posts stay at top for logged-in users).
+- Public visitors (not logged in) can only see and view pinned posts.
 
 Storage behavior:
 

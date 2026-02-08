@@ -8,10 +8,12 @@
   </head>
   <body>
     <div class="container">
-      <h1>Edit Post</h1>
+      <header class="page-header simple">
+        <h1 class="brand-title">Edit Post</h1>
+      </header>
 
       <% if (error) { %>
-        <div style="color:red"><%= error %></div>
+        <p class="upload-error"><%= error %></p>
       <% } %>
 
       <% if (entry.images && entry.images.length) { %>

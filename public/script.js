@@ -1,4 +1,49 @@
 document.addEventListener('DOMContentLoaded', () => {
+  const loadingBar = document.createElement('div');
+  loadingBar.className = 'page-loading-bar';
+  document.body.appendChild(loadingBar);
+  window.setTimeout(() => {
+    loadingBar.classList.add('is-done');
+    window.setTimeout(() => loadingBar.remove(), 380);
+  }, 450);
+
+  const entries = Array.from(document.querySelectorAll('.entry'));
+  if (entries.length) {
+    document.body.classList.add('enable-reveal');
+    entries.forEach((entry, index) => {
+      entry.style.setProperty('--stagger-index', String(index));
+    });
+
+    if ('IntersectionObserver' in window) {
+      const observer = new IntersectionObserver(
+        (items) => {
+          items.forEach((item) => {
+            if (item.isIntersecting) {
+              item.target.classList.add('is-visible');
+              observer.unobserve(item.target);
+            }
+          });
+        },
+        { threshold: 0.1 }
+      );
+      entries.forEach((entry) => observer.observe(entry));
+    } else {
+      entries.forEach((entry) => entry.classList.add('is-visible'));
+    }
+  }
+
+  function bindMediaFade(img) {
+    if (!img) return;
+    if (img.complete && img.naturalWidth > 0) {
+      img.classList.add('is-media-loaded');
+      return;
+    }
+    img.addEventListener('load', () => img.classList.add('is-media-loaded'));
+    img.addEventListener('error', () => img.classList.add('is-media-loaded'));
+  }
+
+  document.querySelectorAll('.entry-images img, .detail-gallery img').forEach(bindMediaFade);
+
   const photoInput = document.querySelector('.upload-form input[name="photos"]');
   const previewWrap = document.getElementById('uploadPreview');
   const previewImg = document.getElementById('uploadPreviewImg');
@@ -17,6 +62,7 @@ document.addEventListener('DOMContentLoaded', () => {
     previewWrap.hidden = true;
     previewError.hidden = true;
     previewImg.removeAttribute('src');
+    previewImg.classList.remove('is-media-loaded');
     previewName.textContent = '';
     previewInfo.textContent = '';
     previewError.textContent = '';
@@ -43,12 +89,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
       objectUrl = URL.createObjectURL(first);
       previewImg.onload = () => {
+        previewImg.classList.add('is-media-loaded');
         previewWrap.hidden = false;
       };
       previewImg.onerror = () => {
         previewError.textContent = 'This image format cannot be previewed here, but upload may still work.';
         previewError.hidden = false;
         previewImg.removeAttribute('src');
+        previewImg.classList.remove('is-media-loaded');
         if (objectUrl) {
           URL.revokeObjectURL(objectUrl);
           objectUrl = null;

@@ -8,18 +8,21 @@
   </head>
   <body>
     <div class="container">
-      <header style="display:flex;justify-content:space-between;align-items:center">
-        <h1>My Food Notes & Photos</h1>
+      <header class="page-header">
         <div>
+          <h1 class="brand-title">My Food Notes & Photos</h1>
+          <p class="brand-subtitle">A visual diary for meals, places, and moments.</p>
+        </div>
+        <nav class="top-nav">
           <% if (userId) { %>
             <a href="/logout">Logout</a>
           <% } else { %>
             <a href="/login">Login</a>
             <% if (canRegister) { %>
-              | <a href="/register">Register</a>
+              <a href="/register">Register</a>
             <% } %>
           <% } %>
-        </div>
+        </nav>
       </header>
 
       <% if (userId) { %>
@@ -42,7 +45,7 @@
         <p class="upload-error"><%= uploadError %></p>
       <% } %>
       <% } else { %>
-        <p><em>Log in to upload photos and notes.</em></p>
+        <p class="status-note"><em>Log in to upload photos and notes.</em></p>
         <% if (showPinnedOnly) { %>
           <p class="pinned-only-note"><strong>Public mode:</strong> only pinned posts are visible.</p>
         <% } %>
@@ -97,6 +100,6 @@
         <% } %>
       </section>
     </div>
+    <script src="/static/script.js"></script>
   </body>
-  <script src="/static/script.js"></script>
 </html>

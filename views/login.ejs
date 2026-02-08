@@ -7,12 +7,14 @@
     <link rel="stylesheet" href="/static/style.css" />
   </head>
   <body>
-    <div class="container">
-      <h1>Login</h1>
+    <div class="container auth-container">
+      <header class="page-header simple">
+        <h1 class="brand-title">Login</h1>
+      </header>
       <% if (error) { %>
-        <div style="color:red"><%= error %></div>
+        <p class="upload-error"><%= error %></p>
       <% } %>
-      <form action="/login" method="post">
+      <form class="auth-form" action="/login" method="post">
         <label>Username</label>
         <input name="username" required />
         <label>Password</label>
@@ -21,5 +23,6 @@
       </form>
       <p><a href="/">Back</a></p>
     </div>
+    <script src="/static/script.js"></script>
   </body>
 </html>

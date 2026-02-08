@@ -11,20 +11,29 @@
       <header class="page-header simple">
         <h1 class="brand-title">Register</h1>
       </header>
+      <% if (!emailVerificationEnabled) { %>
+        <p class="upload-error">Email verification is currently disabled. Configure SMTP first.</p>
+      <% } %>
       <% if (typeof isFirstUser !== 'undefined' && isFirstUser) { %>
         <p class="info-note">You will be registered as the <strong>admin</strong> with full access.</p>
       <% } else { %>
         <p class="info-note">You will be registered as a <strong>normal user</strong>. You can create and manage your own posts, and view pinned content from others.</p>
       <% } %>
+      <p class="info-note">After submitting, we will send a confirmation code to your email address.</p>
       <% if (error) { %>
         <p class="upload-error"><%= error %></p>
       <% } %>
+      <% if (info) { %>
+        <p class="success-note"><%= info %></p>
+      <% } %>
       <form class="auth-form" action="/register" method="post">
         <label>Username</label>
-        <input name="username" required />
+        <input name="username" value="<%= username || '' %>" required />
+        <label>Email</label>
+        <input name="email" type="email" value="<%= email || '' %>" required />
         <label>Password</label>
         <input name="password" type="password" required />
-        <button type="submit">Create</button>
+        <button type="submit">Send Confirmation Code</button>
       </form>
       <p><a href="/">Back</a></p>
     </div>

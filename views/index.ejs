@@ -15,7 +15,12 @@
         </div>
         <nav class="top-nav">
           <% if (userId) { %>
-            <span>Logged in as <strong><%= userRole %></strong></span>
+            <span>
+              Logged in as <strong><%= userRole %></strong>
+              <% if (userCanPin && userRole !== 'admin') { %>
+                <em>(can pin)</em>
+              <% } %>
+            </span>
             <% if (userRole === 'admin') { %>
               <a href="/admin/users">Manage Users</a>
             <% } %>
@@ -30,6 +35,8 @@
       <% if (userId) { %>
       <% if (userRole === 'admin') { %>
         <p class="status-note"><em>Admin view: Showing all posts</em></p>
+      <% } else if (userCanPin) { %>
+        <p class="status-note"><em>Pin manager: You can pin/unpin posts you can view.</em></p>
       <% } else { %>
         <p class="status-note"><em>Normal user: You can create posts and view pinned content</em></p>
       <% } %>
@@ -96,12 +103,21 @@
                     <form class="delete-form" action="/entries/<%= e.id %>/delete" method="post" onsubmit="return confirm('Delete this post?')">
                       <button class="delete-btn" type="submit">Delete</button>
                     </form>
-                  <% } else if (userId && e.user_id === userId) { %>
-                    <!-- Normal users can only edit/delete their own posts -->
-                    <a class="edit-btn" href="/entries/<%= e.id %>/edit">Edit</a>
-                    <form class="delete-form" action="/entries/<%= e.id %>/delete" method="post" onsubmit="return confirm('Delete this post?')">
-                      <button class="delete-btn" type="submit">Delete</button>
-                    </form>
+                  <% } else { %>
+                    <% if (userCanPin) { %>
+                      <form class="pin-form" action="/entries/<%= e.id %>/pin" method="post">
+                        <input type="hidden" name="pinned" value="<%= e.is_pinned ? 0 : 1 %>" />
+                        <input type="hidden" name="returnTo" value="/" />
+                        <button class="pin-btn" type="submit"><%= e.is_pinned ? 'Unpin' : 'Pin' %></button>
+                      </form>
+                    <% } %>
+                    <% if (userId && e.user_id === userId) { %>
+                      <!-- Normal users can only edit/delete their own posts -->
+                      <a class="edit-btn" href="/entries/<%= e.id %>/edit">Edit</a>
+                      <form class="delete-form" action="/entries/<%= e.id %>/delete" method="post" onsubmit="return confirm('Delete this post?')">
+                        <button class="delete-btn" type="submit">Delete</button>
+                      </form>
+                    <% } %>
                   <% } %>
                 </div>
               </div>

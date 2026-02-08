@@ -8,6 +8,7 @@ Post features:
 - Single-post detail page with full-size image viewer on click.
 - Edit and delete existing posts.
 - Pin/unpin posts (pinned posts stay at top for logged-in users).
+- Admin can grant non-admin users a separate pin permission.
 - Public visitors (not logged in) can only see and view pinned posts.
 
 Storage behavior:
@@ -18,8 +19,9 @@ Storage behavior:
 
 First-time setup:
 
-- Open `http://localhost:3000` and use the `Register` link to create the first user.
-- After one user exists, registration is disabled.
+- Configure SMTP variables first (see below), then open `http://localhost:3000`.
+- Use the `Register` link, enter username/email/password, then verify with the 6-digit code sent by email.
+- The first verified user becomes `admin`; later users become `normal`.
 
 Run locally:
 
@@ -87,10 +89,17 @@ Environment variables:
 - `SESSION_COOKIE_SECURE` — set `true` behind HTTPS reverse proxy
 - `SESSION_COOKIE_SAME_SITE` — cookie SameSite policy (default `lax`)
 - `TRUST_PROXY` — set `true` when behind Caddy or another reverse proxy
+- `SMTP_HOST` — SMTP server host for registration emails
+- `SMTP_PORT` — SMTP server port (usually `587` or `465`)
+- `SMTP_SECURE` — set `true` for SMTPS (usually with port `465`)
+- `SMTP_USER` / `SMTP_PASS` — SMTP credentials (if required by provider)
+- `SMTP_FROM` — sender address used for confirmation emails
+- `REGISTRATION_CODE_TTL_MINUTES` — code expiry in minutes (default `10`)
 - `SITE_DOMAIN` — primary domain used by Caddy in production
 - `ACME_EMAIL` — email for Let's Encrypt certificate registration
 - `DB_PATH` — optional SQLite path (default `./data.db`)
 - `DAILY_UPLOAD_LIMIT` — max number of posts per day (default `1000`)
+- `DAILY_REGISTRATION_LIMIT` — max number of new users per day (default `200`)
 - `MAX_IMAGES_PER_POST` — max images allowed in one post (default `10`)
 
 Example run (local env):
@@ -102,6 +111,12 @@ export R2_ACCESS_KEY_ID="..."
 export R2_SECRET_ACCESS_KEY="..."
 export R2_PUBLIC_BASE_URL="https://<bucket>.<accountid>.r2.cloudflarestorage.com"
 export SESSION_SECRET="yoursecret"
+export SMTP_HOST="smtp.mailprovider.com"
+export SMTP_PORT="587"
+export SMTP_SECURE="false"
+export SMTP_USER="smtp-user"
+export SMTP_PASS="smtp-pass"
+export SMTP_FROM="no-reply@ldnmeals.com"
 npm start
 ```
 
@@ -130,6 +145,11 @@ Set at least:
 - `SESSION_SECRET=<strong-random-value>`
 - `SITE_DOMAIN=ldnmeals.com`
 - `ACME_EMAIL=<your-email>`
+- `SMTP_HOST=<your-smtp-host>`
+- `SMTP_PORT=587`
+- `SMTP_FROM=no-reply@ldnmeals.com`
+- `SMTP_USER=<smtp-user>`
+- `SMTP_PASS=<smtp-pass>`
 
 4. Start the app with production compose:
 

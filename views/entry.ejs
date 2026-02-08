@@ -48,12 +48,21 @@
                 <button class="delete-btn" type="submit">Delete</button>
               </form>
             </div>
-          <% } else if (userId && entry.user_id === userId) { %>
+          <% } else { %>
             <div class="entry-actions">
-              <a class="edit-btn" href="/entries/<%= entry.id %>/edit">Edit</a>
-              <form class="delete-form" action="/entries/<%= entry.id %>/delete" method="post" onsubmit="return confirm('Delete this post?')">
-                <button class="delete-btn" type="submit">Delete</button>
-              </form>
+              <% if (userCanPin) { %>
+                <form class="pin-form" action="/entries/<%= entry.id %>/pin" method="post">
+                  <input type="hidden" name="pinned" value="<%= entry.is_pinned ? 0 : 1 %>" />
+                  <input type="hidden" name="returnTo" value="/entries/<%= entry.id %>" />
+                  <button class="pin-btn" type="submit"><%= entry.is_pinned ? 'Unpin' : 'Pin' %></button>
+                </form>
+              <% } %>
+              <% if (userId && entry.user_id === userId) { %>
+                <a class="edit-btn" href="/entries/<%= entry.id %>/edit">Edit</a>
+                <form class="delete-form" action="/entries/<%= entry.id %>/delete" method="post" onsubmit="return confirm('Delete this post?')">
+                  <button class="delete-btn" type="submit">Delete</button>
+                </form>
+              <% } %>
             </div>
           <% } %>
         </div>

@@ -7,16 +7,35 @@ const sqlite3 = require('sqlite3').verbose();
 const session = require('express-session');
 const bcrypt = require('bcryptjs');
 const { S3Client, PutObjectCommand, DeleteObjectCommand } = require('@aws-sdk/client-s3');
+let nodemailer = null;
+try {
+  nodemailer = require('nodemailer');
+} catch (err) {
+  // Optional dependency: registration email verification stays disabled until installed.
+}
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 const UPLOADS_DIR = path.join(__dirname, 'uploads');
 const DB_PATH = process.env.DB_PATH || path.join(__dirname, 'data.db');
 const DAILY_UPLOAD_LIMIT = Math.max(1, Number.parseInt(process.env.DAILY_UPLOAD_LIMIT || '1000', 10));
+const DAILY_REGISTRATION_LIMIT = Math.max(1, Number.parseInt(process.env.DAILY_REGISTRATION_LIMIT || '200', 10));
 const MAX_IMAGES_PER_POST = Math.max(1, Number.parseInt(process.env.MAX_IMAGES_PER_POST || '10', 10));
 const TRUST_PROXY = process.env.TRUST_PROXY === 'true';
 const SESSION_COOKIE_SECURE = process.env.SESSION_COOKIE_SECURE === 'true';
 const SESSION_COOKIE_SAME_SITE = process.env.SESSION_COOKIE_SAME_SITE || 'lax';
+const REGISTRATION_CODE_TTL_MINUTES = Math.max(
+  1,
+  Number.parseInt(process.env.REGISTRATION_CODE_TTL_MINUTES || '10', 10)
+);
+const REGISTRATION_CODE_TTL_MS = REGISTRATION_CODE_TTL_MINUTES * 60 * 1000;
+const SMTP_HOST = (process.env.SMTP_HOST || '').trim();
+const SMTP_PORT = Math.max(1, Number.parseInt(process.env.SMTP_PORT || '587', 10));
+const SMTP_SECURE = process.env.SMTP_SECURE === 'true';
+const SMTP_USER = (process.env.SMTP_USER || '').trim();
+const SMTP_PASS = process.env.SMTP_PASS || '';
+const SMTP_FROM = (process.env.SMTP_FROM || '').trim();
+const EMAIL_VERIFICATION_ENABLED = Boolean(nodemailer && SMTP_HOST && SMTP_FROM);
 const hasR2UploadConfig = Boolean(
   process.env.R2_ENDPOINT &&
   process.env.R2_BUCKET &&
@@ -56,22 +75,30 @@ app.use(session({
   }
 }));
 
-// Attach user role to request for authorization checks
+// Attach user role/permissions to request for authorization checks
 app.use(async (req, res, next) => {
   if (req.session && req.session.userId) {
     // Use session cache if available
-    if (req.session.userRole) {
+    if (req.session.userRole && typeof req.session.userCanPin === 'boolean') {
       req.userRole = req.session.userRole;
+      req.userCanPin = req.session.userCanPin;
     } else {
       // Fetch from DB and cache in session
-      const user = await dbGetAsync('SELECT role FROM users WHERE id = ?', [req.session.userId]);
+      const user = await dbGetAsync('SELECT role, can_pin FROM users WHERE id = ?', [req.session.userId]);
       req.userRole = user ? user.role : null;
-      if (req.userRole) req.session.userRole = req.userRole;
+      req.userCanPin = Boolean(user && Number(user.can_pin || 0) === 1);
+      if (req.userRole) {
+        req.session.userRole = req.userRole;
+        req.session.userCanPin = req.userCanPin;
+      }
     }
     res.locals.userRole = req.userRole; // Make available to views
+    res.locals.userCanPin = req.userCanPin;
   } else {
     req.userRole = null;
+    req.userCanPin = false;
     res.locals.userRole = null;
+    res.locals.userCanPin = false;
   }
   next();
 });
@@ -132,8 +159,23 @@ db.serialize(() => {
   db.run(`CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     username TEXT UNIQUE,
-    password_hash TEXT
+    email TEXT UNIQUE,
+    password_hash TEXT,
+    role TEXT DEFAULT "normal",
+    can_pin INTEGER DEFAULT 0,
+    email_verified_at INTEGER
   )`);
+  db.run(`CREATE TABLE IF NOT EXISTS pending_registrations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT UNIQUE,
+    email TEXT NOT NULL,
+    password_hash TEXT NOT NULL,
+    verification_code TEXT NOT NULL,
+    code_expires_at INTEGER NOT NULL,
+    created_at INTEGER NOT NULL
+  )`);
+  db.run('CREATE INDEX IF NOT EXISTS idx_pending_registrations_expires ON pending_registrations(code_expires_at)');
+  db.run('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_unique ON users(email) WHERE email IS NOT NULL');
   // Migration: Add role column to users table
   db.all('PRAGMA table_info(users)', (pragmaErr, cols) => {
     if (pragmaErr) return console.error('PRAGMA users error:', pragmaErr);
@@ -147,6 +189,27 @@ db.serialize(() => {
           if (updateErr) console.error('users role update error:', updateErr);
           else console.log('✓ First user set to admin role');
         });
+      });
+    }
+    const hasEmail = Array.isArray(cols) && cols.some((col) => col.name === 'email');
+    if (!hasEmail) {
+      db.run('ALTER TABLE users ADD COLUMN email TEXT', (alterErr) => {
+        if (alterErr) console.error('users email migration error:', alterErr);
+        else console.log('✓ Added email column to users');
+      });
+    }
+    const hasEmailVerifiedAt = Array.isArray(cols) && cols.some((col) => col.name === 'email_verified_at');
+    if (!hasEmailVerifiedAt) {
+      db.run('ALTER TABLE users ADD COLUMN email_verified_at INTEGER', (alterErr) => {
+        if (alterErr) console.error('users email_verified_at migration error:', alterErr);
+        else console.log('✓ Added email_verified_at column to users');
+      });
+    }
+    const hasCanPin = Array.isArray(cols) && cols.some((col) => col.name === 'can_pin');
+    if (!hasCanPin) {
+      db.run('ALTER TABLE users ADD COLUMN can_pin INTEGER DEFAULT 0', (alterErr) => {
+        if (alterErr) return console.error('users can_pin migration error:', alterErr);
+        console.log('✓ Added can_pin column to users');
       });
     }
   });
@@ -196,6 +259,65 @@ function dbRunAsync(sql, params = []) {
       if (err) return reject(err);
       resolve(this);
     });
+  });
+}
+
+function normalizeEmail(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function isValidEmail(email) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+}
+
+function generateVerificationCode() {
+  return String(Math.floor(100000 + Math.random() * 900000));
+}
+
+function maskEmail(email) {
+  const [local, domain] = String(email || '').split('@');
+  if (!local || !domain) return email;
+  const first = local.slice(0, 1);
+  const last = local.length > 1 ? local.slice(-1) : '';
+  return `${first}${'*'.repeat(Math.max(1, local.length - 2))}${last}@${domain}`;
+}
+
+let emailTransporter = null;
+
+function getEmailTransporter() {
+  if (!EMAIL_VERIFICATION_ENABLED) return null;
+  if (emailTransporter) return emailTransporter;
+  const baseConfig = {
+    host: SMTP_HOST,
+    port: SMTP_PORT,
+    secure: SMTP_SECURE
+  };
+  if (SMTP_USER && SMTP_PASS) {
+    baseConfig.auth = {
+      user: SMTP_USER,
+      pass: SMTP_PASS
+    };
+  }
+  emailTransporter = nodemailer.createTransport(baseConfig);
+  return emailTransporter;
+}
+
+async function sendRegistrationVerificationEmail(email, username, code) {
+  const transporter = getEmailTransporter();
+  if (!transporter) throw new Error('Email verification is not configured');
+
+  await transporter.sendMail({
+    from: SMTP_FROM,
+    to: email,
+    subject: 'Your MyFoodWebsite confirmation code',
+    text: [
+      `Hi ${username},`,
+      '',
+      `Your confirmation code is: ${code}`,
+      `This code expires in ${REGISTRATION_CODE_TTL_MINUTES} minute(s).`,
+      '',
+      'If you did not request this, please ignore this email.'
+    ].join('\n')
   });
 }
 
@@ -308,6 +430,16 @@ async function ensureAdmin(req, res, next) {
   return next();
 }
 
+function canPinPosts(req) {
+  return req.userRole === 'admin' || req.userCanPin === true;
+}
+
+function ensureCanPin(req, res, next) {
+  if (!req.session || !req.session.userId) return res.redirect('/login');
+  if (!canPinPosts(req)) return res.status(403).send('Pin permission required');
+  return next();
+}
+
 // Check if user owns the resource or is admin
 async function ensureOwnerOrAdmin(req, res, next) {
   if (!req.session || !req.session.userId) return res.redirect('/login');
@@ -345,9 +477,23 @@ function getEntryCountInRange(startMs, endMs) {
   });
 }
 
+function getRegistrationCountInRange(startMs, endMs) {
+  return new Promise((resolve, reject) => {
+    db.get(
+      'SELECT COUNT(*) AS c FROM users WHERE email_verified_at >= ? AND email_verified_at < ?',
+      [startMs, endMs],
+      (err, row) => {
+        if (err) return reject(err);
+        resolve(row?.c || 0);
+      }
+    );
+  });
+}
+
 app.get('/', async (req, res) => {
   try {
     const isAdmin = req.userRole === 'admin';
+    const userCanPin = canPinPosts(req);
     const userId = req.session.userId;
 
     let rows;
@@ -388,6 +534,7 @@ app.get('/', async (req, res) => {
       entries,
       userId: req.session.userId,
       userRole: req.userRole,
+      userCanPin,
       canRegister: true, // Always allow registration now
       uploadError,
       maxImagesPerPost: MAX_IMAGES_PER_POST,
@@ -466,7 +613,8 @@ app.get('/entries/:id', async (req, res) => {
     res.render('entry', {
       entry: { ...row, images },
       userId: req.session.userId,
-      userRole: req.userRole
+      userRole: req.userRole,
+      userCanPin: canPinPosts(req)
     });
   } catch (err) {
     console.error(err);
@@ -474,7 +622,7 @@ app.get('/entries/:id', async (req, res) => {
   }
 });
 
-app.post('/entries/:id/pin', ensureAdmin, async (req, res) => {
+app.post('/entries/:id/pin', ensureCanPin, async (req, res) => {
   const entryId = Number.parseInt(req.params.id, 10);
   if (!Number.isInteger(entryId) || entryId <= 0) {
     return res.status(400).send('Invalid entry id');
@@ -637,7 +785,7 @@ app.post('/entries/:id/delete', ensureOwnerOrAdmin, async (req, res) => {
 // Admin: User Management routes
 app.get('/admin/users', ensureAdmin, async (req, res) => {
   try {
-    const users = await dbAllAsync('SELECT id, username, role FROM users ORDER BY id ASC');
+    const users = await dbAllAsync('SELECT id, username, role, can_pin FROM users ORDER BY id ASC');
     res.render('admin-users', { users, userId: req.session.userId, userRole: req.userRole });
   } catch (err) {
     console.error(err);
@@ -677,6 +825,34 @@ app.post('/admin/users/:id/role', ensureAdmin, async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).send('Error updating user role');
+  }
+});
+
+app.post('/admin/users/:id/pin-permission', ensureAdmin, async (req, res) => {
+  const targetUserId = Number.parseInt(req.params.id, 10);
+  const canPin = String(req.body.canPin || '').trim() === '1' ? 1 : 0;
+
+  if (!Number.isInteger(targetUserId) || targetUserId <= 0) {
+    return res.status(400).send('Invalid user id');
+  }
+
+  try {
+    const targetUser = await dbGetAsync('SELECT id, role FROM users WHERE id = ?', [targetUserId]);
+    if (!targetUser) return res.status(404).send('User not found');
+
+    // Admin users always have pin capability via role; this toggle is for non-admin users.
+    if (targetUser.role !== 'admin') {
+      await dbRunAsync('UPDATE users SET can_pin = ? WHERE id = ?', [canPin, targetUserId]);
+    }
+
+    if (targetUserId === req.session.userId) {
+      req.session.userCanPin = canPin === 1;
+    }
+
+    res.redirect('/admin/users');
+  } catch (err) {
+    console.error(err);
+    res.status(500).send('Error updating pin permission');
   }
 });
 
@@ -744,6 +920,7 @@ app.post('/login', (req, res) => {
     if (!bcrypt.compareSync(password, row.password_hash)) return res.render('login', { error: 'Invalid credentials' });
     req.session.userId = row.id;
     req.session.userRole = row.role;
+    req.session.userCanPin = Boolean(Number(row.can_pin || 0) === 1);
     res.redirect('/');
   });
 });
@@ -752,44 +929,291 @@ app.get('/logout', (req, res) => {
   req.session.destroy(() => res.redirect('/'));
 });
 
-// Registration: first user becomes admin, subsequent users become normal users
-app.get('/register', (req, res) => {
+// Registration with email confirmation code:
+// Step 1 -> create pending registration + send code
+// Step 2 -> verify code and create user
+app.get('/register', async (req, res) => {
   if (req.session && req.session.userId) return res.redirect('/');
-  db.get('SELECT COUNT(*) as c FROM users', (err, row) => {
-    if (err) return res.status(500).send('DB error');
-    const userCount = (row && row.c) || 0;
-    res.render('register', { error: null, isFirstUser: userCount === 0 });
-  });
+  delete req.session.pendingRegistrationUsername;
+  try {
+    const countRow = await dbGetAsync('SELECT COUNT(*) AS c FROM users');
+    const userCount = countRow?.c || 0;
+    res.render('register', {
+      error: null,
+      info: null,
+      username: '',
+      email: '',
+      isFirstUser: userCount === 0,
+      emailVerificationEnabled: EMAIL_VERIFICATION_ENABLED
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).send('DB error');
+  }
 });
 
-app.post('/register', (req, res) => {
+app.post('/register', async (req, res) => {
   const username = (req.body.username || '').trim();
+  const email = normalizeEmail(req.body.email);
   const password = req.body.password || '';
-  if (!username || !password) {
-    return res.status(400).render('register', { error: 'Username and password are required' });
+  let isFirstUser = false;
+
+  try {
+    const countRow = await dbGetAsync('SELECT COUNT(*) AS c FROM users');
+    isFirstUser = (countRow?.c || 0) === 0;
+    const { startMs, endMs } = getDayRangeMs();
+    const dailyRegistrationCount = await getRegistrationCountInRange(startMs, endMs);
+
+    if (dailyRegistrationCount >= DAILY_REGISTRATION_LIMIT) {
+      return res.status(400).render('register', {
+        error: `Daily registration limit reached (${DAILY_REGISTRATION_LIMIT} users). Try again tomorrow.`,
+        info: null,
+        username,
+        email,
+        isFirstUser,
+        emailVerificationEnabled: EMAIL_VERIFICATION_ENABLED
+      });
+    }
+
+    if (!username || !email || !password) {
+      return res.status(400).render('register', {
+        error: 'Username, email, and password are required',
+        info: null,
+        username,
+        email,
+        isFirstUser,
+        emailVerificationEnabled: EMAIL_VERIFICATION_ENABLED
+      });
+    }
+
+    if (!isValidEmail(email)) {
+      return res.status(400).render('register', {
+        error: 'Please enter a valid email address',
+        info: null,
+        username,
+        email,
+        isFirstUser,
+        emailVerificationEnabled: EMAIL_VERIFICATION_ENABLED
+      });
+    }
+
+    if (!EMAIL_VERIFICATION_ENABLED) {
+      return res.status(400).render('register', {
+        error: 'Email verification is not configured. Set SMTP_HOST, SMTP_FROM, and install nodemailer.',
+        info: null,
+        username,
+        email,
+        isFirstUser,
+        emailVerificationEnabled: EMAIL_VERIFICATION_ENABLED
+      });
+    }
+
+    const existingUser = await dbGetAsync('SELECT id FROM users WHERE username = ? OR email = ?', [username, email]);
+    if (existingUser) {
+      return res.status(400).render('register', {
+        error: 'Username or email already exists',
+        info: null,
+        username,
+        email,
+        isFirstUser,
+        emailVerificationEnabled: EMAIL_VERIFICATION_ENABLED
+      });
+    }
+
+    const now = Date.now();
+    const hash = bcrypt.hashSync(password, 10);
+    const code = generateVerificationCode();
+    const expiresAt = now + REGISTRATION_CODE_TTL_MS;
+
+    await dbRunAsync('DELETE FROM pending_registrations WHERE code_expires_at < ?', [now]);
+    await dbRunAsync(
+      `INSERT INTO pending_registrations(username, email, password_hash, verification_code, code_expires_at, created_at)
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT(username) DO UPDATE SET
+         email = excluded.email,
+         password_hash = excluded.password_hash,
+         verification_code = excluded.verification_code,
+         code_expires_at = excluded.code_expires_at,
+         created_at = excluded.created_at`,
+      [username, email, hash, code, expiresAt, now]
+    );
+
+    await sendRegistrationVerificationEmail(email, username, code);
+    req.session.pendingRegistrationUsername = username;
+    res.redirect('/register/verify');
+  } catch (err) {
+    console.error(err);
+    res.status(500).render('register', {
+      error: 'Failed to send verification email. Check SMTP settings and try again.',
+      info: null,
+      username,
+      email,
+      isFirstUser,
+      emailVerificationEnabled: EMAIL_VERIFICATION_ENABLED
+    });
+  }
+});
+
+app.get('/register/verify', async (req, res) => {
+  if (req.session && req.session.userId) return res.redirect('/');
+  const username = (req.query.username || req.session.pendingRegistrationUsername || '').trim();
+  if (!username) {
+    return res.redirect('/register');
   }
 
-  db.get('SELECT COUNT(*) as c FROM users', (err, row) => {
-    if (err) return res.status(500).send('DB error');
-
-    const isFirstUser = row.c === 0;
-    const role = isFirstUser ? 'admin' : 'normal';
-    const hash = bcrypt.hashSync(password, 10);
-
-    db.run('INSERT INTO users(username, password_hash, role) VALUES (?, ?, ?)',
-      [username, hash, role],
-      function(err) {
-        if (err && err.code === 'SQLITE_CONSTRAINT') {
-          return res.status(400).render('register', { error: 'Username already exists' });
-        }
-        if (err) return res.status(500).send('DB insert error');
-
-        req.session.userId = this.lastID;
-        req.session.userRole = role;
-        res.redirect('/');
-      }
+  try {
+    const pending = await dbGetAsync(
+      'SELECT username, email, code_expires_at FROM pending_registrations WHERE username = ?',
+      [username]
     );
-  });
+    if (!pending) return res.redirect('/register');
+
+    res.render('register-verify', {
+      error: null,
+      info: null,
+      username: pending.username,
+      emailHint: maskEmail(pending.email),
+      codeTtlMinutes: REGISTRATION_CODE_TTL_MINUTES
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).send('DB error');
+  }
+});
+
+app.post('/register/resend', async (req, res) => {
+  if (req.session && req.session.userId) return res.redirect('/');
+  const username = (req.body.username || req.session.pendingRegistrationUsername || '').trim();
+  if (!username) return res.redirect('/register');
+
+  try {
+    const pending = await dbGetAsync(
+      'SELECT username, email, password_hash FROM pending_registrations WHERE username = ?',
+      [username]
+    );
+    if (!pending) return res.redirect('/register');
+
+    const now = Date.now();
+    const code = generateVerificationCode();
+    const expiresAt = now + REGISTRATION_CODE_TTL_MS;
+    await dbRunAsync(
+      `UPDATE pending_registrations
+       SET verification_code = ?, code_expires_at = ?, created_at = ?
+       WHERE username = ?`,
+      [code, expiresAt, now, username]
+    );
+    await sendRegistrationVerificationEmail(pending.email, username, code);
+
+    res.render('register-verify', {
+      error: null,
+      info: `New code sent to ${maskEmail(pending.email)}.`,
+      username,
+      emailHint: maskEmail(pending.email),
+      codeTtlMinutes: REGISTRATION_CODE_TTL_MINUTES
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).render('register-verify', {
+      error: 'Failed to resend code. Check SMTP settings and try again.',
+      info: null,
+      username,
+      emailHint: '',
+      codeTtlMinutes: REGISTRATION_CODE_TTL_MINUTES
+    });
+  }
+});
+
+app.post('/register/verify', async (req, res) => {
+  if (req.session && req.session.userId) return res.redirect('/');
+  const username = (req.body.username || req.session.pendingRegistrationUsername || '').trim();
+  const code = String(req.body.code || '').trim();
+  if (!username || !code) {
+    return res.status(400).render('register-verify', {
+      error: 'Username and confirmation code are required.',
+      info: null,
+      username,
+      emailHint: '',
+      codeTtlMinutes: REGISTRATION_CODE_TTL_MINUTES
+    });
+  }
+
+  try {
+    const now = Date.now();
+    const { startMs, endMs } = getDayRangeMs(new Date(now));
+    const dailyRegistrationCount = await getRegistrationCountInRange(startMs, endMs);
+    if (dailyRegistrationCount >= DAILY_REGISTRATION_LIMIT) {
+      return res.status(400).render('register-verify', {
+        error: `Daily registration limit reached (${DAILY_REGISTRATION_LIMIT} users). Try again tomorrow.`,
+        info: null,
+        username,
+        emailHint: '',
+        codeTtlMinutes: REGISTRATION_CODE_TTL_MINUTES
+      });
+    }
+    await dbRunAsync('DELETE FROM pending_registrations WHERE code_expires_at < ?', [now]);
+    const pending = await dbGetAsync(
+      `SELECT username, email, password_hash, verification_code, code_expires_at
+       FROM pending_registrations
+       WHERE username = ?`,
+      [username]
+    );
+    if (!pending) {
+      return res.status(400).render('register-verify', {
+        error: 'Registration request not found or expired. Please register again.',
+        info: null,
+        username,
+        emailHint: '',
+        codeTtlMinutes: REGISTRATION_CODE_TTL_MINUTES
+      });
+    }
+
+    if (pending.verification_code !== code) {
+      return res.status(400).render('register-verify', {
+        error: 'Invalid confirmation code.',
+        info: null,
+        username: pending.username,
+        emailHint: maskEmail(pending.email),
+        codeTtlMinutes: REGISTRATION_CODE_TTL_MINUTES
+      });
+    }
+
+    const existingUser = await dbGetAsync('SELECT id FROM users WHERE username = ? OR email = ?', [pending.username, pending.email]);
+    if (existingUser) {
+      await dbRunAsync('DELETE FROM pending_registrations WHERE username = ?', [pending.username]);
+      return res.status(400).render('register', {
+        error: 'Username or email already exists. Please try registering again.',
+        info: null,
+        username: '',
+        email: '',
+        isFirstUser: false,
+        emailVerificationEnabled: EMAIL_VERIFICATION_ENABLED
+      });
+    }
+
+    const countRow = await dbGetAsync('SELECT COUNT(*) AS c FROM users');
+    const role = (countRow?.c || 0) === 0 ? 'admin' : 'normal';
+    const canPin = role === 'admin' ? 1 : 0;
+    const insertResult = await dbRunAsync(
+      'INSERT INTO users(username, email, password_hash, role, can_pin, email_verified_at) VALUES (?, ?, ?, ?, ?, ?)',
+      [pending.username, pending.email, pending.password_hash, role, canPin, now]
+    );
+    await dbRunAsync('DELETE FROM pending_registrations WHERE username = ?', [pending.username]);
+
+    req.session.userId = insertResult.lastID;
+    req.session.userRole = role;
+    req.session.userCanPin = canPin === 1;
+    delete req.session.pendingRegistrationUsername;
+    res.redirect('/');
+  } catch (err) {
+    console.error(err);
+    res.status(500).render('register-verify', {
+      error: 'Verification failed. Please try again.',
+      info: null,
+      username,
+      emailHint: '',
+      codeTtlMinutes: REGISTRATION_CODE_TTL_MINUTES
+    });
+  }
 });
 
 // Helper: expose file urls when rendering

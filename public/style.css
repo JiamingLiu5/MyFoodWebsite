@@ -186,6 +186,12 @@ a:hover{color:#0f5078}
 
 .upload-preview-meta{font-size:12px;color:var(--muted);display:grid;gap:2px;word-break:break-word}
 .upload-preview-error,.upload-error{margin:0;color:var(--danger);font-size:13px}
+.success-note{
+  margin:0;
+  color:var(--primary);
+  font-size:13px;
+  font-weight:700;
+}
 .pinned-only-note{margin:0 0 12px;color:var(--muted);font-size:14px}
 
 .entries{
@@ -429,6 +435,25 @@ body.enable-reveal .entry.is-visible{opacity:1;transform:translateY(0) scale(1)}
   color:var(--secondary);
 }
 
+.permission-badge{
+  display:inline-block;
+  padding:4px 12px;
+  border-radius:12px;
+  font-size:12px;
+  font-weight:700;
+  letter-spacing:0.4px;
+}
+
+.permission-badge.permission-on{
+  background:var(--primary-soft);
+  color:var(--primary);
+}
+
+.permission-badge.permission-off{
+  background:#edf1f5;
+  color:#6c7783;
+}
+
 .badge{
   display:inline-block;
   padding:2px 8px;
@@ -451,6 +476,12 @@ body.enable-reveal .entry.is-visible{opacity:1;transform:translateY(0) scale(1)}
   margin:0;
 }
 
+.auth-secondary-actions{
+  display:flex;
+  align-items:center;
+  gap:12px;
+}
+
 .role-btn{
   padding:8px 16px;
   background:var(--secondary);
@@ -467,6 +498,23 @@ body.enable-reveal .entry.is-visible{opacity:1;transform:translateY(0) scale(1)}
   background:var(--primary);
   transform:translateY(-1px);
   box-shadow:0 4px 12px rgba(15,122,119,0.3);
+}
+
+.perm-btn{
+  padding:8px 16px;
+  background:var(--warning-soft);
+  color:var(--warning);
+  border:1px solid #e5cc82;
+  border-radius:8px;
+  font-size:13px;
+  font-weight:700;
+  cursor:pointer;
+  transition:all 0.2s ease;
+}
+
+.perm-btn:hover{
+  background:#ffefc2;
+  transform:translateY(-1px);
 }
 
 .info-text{

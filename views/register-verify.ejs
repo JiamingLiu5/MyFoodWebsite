@@ -1,0 +1,45 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Verify Registration</title>
+    <link rel="stylesheet" href="/static/style.css" />
+  </head>
+  <body>
+    <div class="container auth-container">
+      <header class="page-header simple">
+        <h1 class="brand-title">Verify Email</h1>
+      </header>
+
+      <p class="info-note">
+        Enter the 6-digit code sent to <strong><%= emailHint || 'your email' %></strong>.
+        The code is valid for <strong><%= codeTtlMinutes %> minutes</strong>.
+      </p>
+
+      <% if (error) { %>
+        <p class="upload-error"><%= error %></p>
+      <% } %>
+      <% if (info) { %>
+        <p class="success-note"><%= info %></p>
+      <% } %>
+
+      <form class="auth-form" action="/register/verify" method="post">
+        <label>Username</label>
+        <input name="username" value="<%= username %>" required />
+        <label>Confirmation Code</label>
+        <input name="code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" placeholder="123456" required />
+        <button type="submit">Verify & Create Account</button>
+      </form>
+
+      <div class="auth-secondary-actions">
+        <form class="inline-form" action="/register/resend" method="post">
+          <input type="hidden" name="username" value="<%= username %>" />
+          <button class="view-btn" type="submit">Resend Code</button>
+        </form>
+        <a href="/register">Start Over</a>
+      </div>
+    </div>
+    <script src="/static/script.js"></script>
+  </body>
+</html>

@@ -32,6 +32,9 @@
           <% } %>
           <div class="note"><%= entry.note ? entry.note : '(no note)' %></div>
           <div class="time"><%= new Date(entry.created_at).toLocaleString() %></div>
+          <% if (userRole === 'admin') { %>
+            <div class="author-note">Posted by: <%= entry.author_username || 'Unknown user' %></div>
+          <% } %>
           <p class="detail-hint">Click image to view full size.</p>
           <% if (userRole === 'admin') { %>
             <div class="entry-actions">

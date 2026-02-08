@@ -199,6 +199,12 @@ function dbRunAsync(sql, params = []) {
   });
 }
 
+const ENTRY_SELECT_WITH_AUTHOR = `
+  SELECT e.*, u.username AS author_username
+  FROM entries e
+  LEFT JOIN users u ON u.id = e.user_id
+`;
+
 async function getEntryImagesForEntry(entryId, legacyEntry) {
   const rows = await dbAllAsync(
     'SELECT id, entry_id, filename, originalname, sort_order FROM entry_images WHERE entry_id = ? ORDER BY sort_order, id',
@@ -348,18 +354,23 @@ app.get('/', async (req, res) => {
     if (isAdmin) {
       // Admins see all posts
       rows = await dbAllAsync(
-        'SELECT * FROM entries ORDER BY COALESCE(is_pinned, 0) DESC, created_at DESC'
+        `${ENTRY_SELECT_WITH_AUTHOR}
+         ORDER BY COALESCE(e.is_pinned, 0) DESC, e.created_at DESC`
       );
     } else if (userId) {
       // Normal users see: pinned posts OR their own posts
       rows = await dbAllAsync(
-        'SELECT * FROM entries WHERE COALESCE(is_pinned, 0) = 1 OR user_id = ? ORDER BY COALESCE(is_pinned, 0) DESC, created_at DESC',
+        `${ENTRY_SELECT_WITH_AUTHOR}
+         WHERE COALESCE(e.is_pinned, 0) = 1 OR e.user_id = ?
+         ORDER BY COALESCE(e.is_pinned, 0) DESC, e.created_at DESC`,
         [userId]
       );
     } else {
       // Non-authenticated users see only pinned posts
       rows = await dbAllAsync(
-        'SELECT * FROM entries WHERE COALESCE(is_pinned, 0) = 1 ORDER BY created_at DESC'
+        `${ENTRY_SELECT_WITH_AUTHOR}
+         WHERE COALESCE(e.is_pinned, 0) = 1
+         ORDER BY e.created_at DESC`
       );
     }
 
@@ -435,7 +446,11 @@ app.get('/entries/:id', async (req, res) => {
   }
 
   try {
-    const row = await dbGetAsync('SELECT * FROM entries WHERE id = ?', [entryId]);
+    const row = await dbGetAsync(
+      `${ENTRY_SELECT_WITH_AUTHOR}
+       WHERE e.id = ?`,
+      [entryId]
+    );
     if (!row) return res.status(404).send('Entry not found');
 
     const isAdmin = req.userRole === 'admin';

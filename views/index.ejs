@@ -80,6 +80,9 @@
                 <% } %>
                 <div class="note"><%= e.note ? e.note : '(no note)' %></div>
                 <div class="time"><%= new Date(e.created_at).toLocaleString() %></div>
+                <% if (userRole === 'admin') { %>
+                  <div class="author-note">Posted by: <%= e.author_username || 'Unknown user' %></div>
+                <% } %>
                 <div class="entry-actions">
                   <a class="view-btn" href="/entries/<%= e.id %>">View</a>
                   <% if (userRole === 'admin') { %>

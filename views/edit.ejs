@@ -35,6 +35,14 @@
       <form id="editPostForm" action="/entries/<%= entry.id %>/edit" method="post" enctype="multipart/form-data" class="upload-form">
         <label>Add photos (optional, up to <%= maxImagesPerPost %> total)</label>
         <input type="file" name="photos" accept="image/*" multiple />
+        <div class="upload-preview" id="uploadPreview" hidden>
+          <img id="uploadPreviewImg" alt="Selected photo preview" />
+          <div class="upload-preview-meta">
+            <div id="uploadPreviewName"></div>
+            <div id="uploadPreviewInfo"></div>
+          </div>
+        </div>
+        <p id="uploadPreviewError" class="upload-preview-error" hidden></p>
         <% if (entry.images && entry.images.length) { %>
           <label><input type="checkbox" name="removeAllPhotos" /> Remove all existing photos</label>
         <% } %>

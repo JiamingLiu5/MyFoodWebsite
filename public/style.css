@@ -476,6 +476,12 @@ body.enable-reveal .entry.is-visible{opacity:1;transform:translateY(0) scale(1)}
   border:1px solid color-mix(in srgb, var(--secondary) 26%, white);
   font-size:12px;
   font-weight:700;
+  text-decoration:none;
+}
+.tag-chip:hover{background:color-mix(in srgb, var(--secondary-soft) 74%, white)}
+.tag-chip:focus-visible{
+  outline:2px solid color-mix(in srgb, var(--secondary) 55%, white);
+  outline-offset:2px;
 }
 
 .entry-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px}

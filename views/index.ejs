@@ -208,7 +208,7 @@
                 <% if (e.tags && e.tags.length > 0) { %>
                   <div class="tags-row">
                     <% e.tags.forEach(function(tag) { %>
-                      <span class="tag-chip">#<%= tag %></span>
+                      <a class="tag-chip" href="/?tag=<%= encodeURIComponent(tag) %>">#<%= tag %></a>
                     <% }) %>
                   </div>
                 <% } %>

@@ -15,6 +15,14 @@
       </header>
 
       <article class="entry detail-entry">
+        <% if (entry.video_filename) { %>
+          <section class="detail-video-wrap">
+            <video id="entryVideo" class="detail-video" controls preload="metadata">
+              <source src="<%= fileUrl(entry.video_filename) %>" <% if (entry.video_mimetype) { %>type="<%= entry.video_mimetype %>"<% } %> />
+              Your browser does not support the video tag.
+            </video>
+          </section>
+        <% } %>
         <% if (entry.images && entry.images.length) { %>
           <section class="detail-gallery">
             <% entry.images.forEach(function(img) { %>
@@ -23,7 +31,7 @@
               </a>
             <% }) %>
           </section>
-        <% } else { %>
+        <% } else if (!entry.video_filename) { %>
           <p>No images for this post.</p>
         <% } %>
 
@@ -50,7 +58,12 @@
           <% if (userRole === 'admin') { %>
             <div class="author-note">Posted by: <%= entry.author_username || 'Unknown user' %></div>
           <% } %>
-          <p class="detail-hint">Click image to view full size.</p>
+          <% if (entry.video_filename) { %>
+            <p class="detail-hint">Click video controls to play.</p>
+          <% } %>
+          <% if (entry.images && entry.images.length) { %>
+            <p class="detail-hint">Click image to view full size.</p>
+          <% } %>
 
           <div class="entry-actions">
             <% if (entry.isDeleted && canEdit) { %>

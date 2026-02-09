@@ -305,17 +305,29 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
-  function bindMediaFade(img) {
-    if (!img) return;
-    if (img.complete && img.naturalWidth > 0) {
-      img.classList.add('is-media-loaded');
+  function bindMediaFade(node) {
+    if (!node) return;
+    const tagName = String(node.tagName || '').toLowerCase();
+    if (tagName === 'img') {
+      if (node.complete && node.naturalWidth > 0) {
+        node.classList.add('is-media-loaded');
+        return;
+      }
+      node.addEventListener('load', () => node.classList.add('is-media-loaded'));
+      node.addEventListener('error', () => node.classList.add('is-media-loaded'));
       return;
     }
-    img.addEventListener('load', () => img.classList.add('is-media-loaded'));
-    img.addEventListener('error', () => img.classList.add('is-media-loaded'));
+    if (tagName === 'video') {
+      if (node.readyState >= 2) {
+        node.classList.add('is-media-loaded');
+        return;
+      }
+      node.addEventListener('loadeddata', () => node.classList.add('is-media-loaded'));
+      node.addEventListener('error', () => node.classList.add('is-media-loaded'));
+    }
   }
 
-  document.querySelectorAll('.entry-images img, .detail-gallery img').forEach(bindMediaFade);
+  document.querySelectorAll('.entry-images img, .detail-gallery img, .entry-video, .detail-video').forEach(bindMediaFade);
 
   const photoInput = document.querySelector('.upload-form input[name="photos"]');
   const previewWrap = document.getElementById('uploadPreview');

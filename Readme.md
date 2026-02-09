@@ -1,10 +1,11 @@
 MyFoodWebsite
 
-This is a minimal Node.js + Express site to upload photos and notes, persisted in a local SQLite database. A Dockerfile and docker-compose are included for containerized runs.
+This is a minimal Node.js + Express site to upload photos, one optional video per post, and notes, persisted in a local SQLite database. A Dockerfile and docker-compose are included for containerized runs.
 
 Post features:
 
 - Multiple images per post (default max 10 per post).
+- One optional video per post.
 - Single-post detail page with full-size image viewer on click.
 - Edit and delete existing posts.
 - Pin/unpin posts (pinned posts stay at top for logged-in users).
@@ -104,6 +105,7 @@ Environment variables:
 - `DAILY_REGISTRATION_LIMIT` — max number of new users per day (default `200`)
 - `MAX_IMAGES_PER_POST` — max images allowed in one post (default `10`)
 - `MAX_UPLOAD_FILE_SIZE_MB` — max size per uploaded image in MB (default `10`)
+- `MAX_VIDEO_FILE_SIZE_MB` — max size for uploaded video in MB (default `50`)
 - `BODY_LIMIT` — max URL-encoded body size (default `256kb`)
 - `AUTH_RATE_LIMIT_WINDOW_MINUTES` — auth brute-force window size (default `15`)
 - `AUTH_RATE_LIMIT_MAX_ATTEMPTS` — max auth attempts per IP per window (default `25`)
@@ -124,6 +126,7 @@ export SMTP_USER="smtp-user"
 export SMTP_PASS="smtp-pass"
 export SMTP_FROM="no-reply@ldnmeals.com"
 export MAX_UPLOAD_FILE_SIZE_MB="10"
+export MAX_VIDEO_FILE_SIZE_MB="50"
 export AUTH_RATE_LIMIT_WINDOW_MINUTES="15"
 export AUTH_RATE_LIMIT_MAX_ATTEMPTS="25"
 npm start

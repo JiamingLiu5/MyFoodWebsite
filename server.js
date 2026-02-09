@@ -26,6 +26,10 @@ const DAILY_REGISTRATION_LIMIT = Math.max(1, Number.parseInt(process.env.DAILY_R
 const MAX_IMAGES_PER_POST = Math.max(1, Number.parseInt(process.env.MAX_IMAGES_PER_POST || '10', 10));
 const MAX_UPLOAD_FILE_SIZE_MB = Math.max(1, Number.parseInt(process.env.MAX_UPLOAD_FILE_SIZE_MB || '10', 10));
 const MAX_UPLOAD_FILE_SIZE_BYTES = MAX_UPLOAD_FILE_SIZE_MB * 1024 * 1024;
+const MAX_VIDEO_FILE_SIZE_MB = Math.max(1, Number.parseInt(process.env.MAX_VIDEO_FILE_SIZE_MB || '50', 10));
+const MAX_VIDEO_FILE_SIZE_BYTES = MAX_VIDEO_FILE_SIZE_MB * 1024 * 1024;
+const MAX_MEDIA_UPLOAD_FILE_SIZE_BYTES = Math.max(MAX_UPLOAD_FILE_SIZE_BYTES, MAX_VIDEO_FILE_SIZE_BYTES);
+const MAX_FILES_PER_POST = MAX_IMAGES_PER_POST + 1;
 const AUTH_RATE_LIMIT_WINDOW_MINUTES = Math.max(1, Number.parseInt(process.env.AUTH_RATE_LIMIT_WINDOW_MINUTES || '15', 10));
 const AUTH_RATE_LIMIT_MAX_ATTEMPTS = Math.max(1, Number.parseInt(process.env.AUTH_RATE_LIMIT_MAX_ATTEMPTS || '25', 10));
 const AUTH_RATE_LIMIT_WINDOW_MS = AUTH_RATE_LIMIT_WINDOW_MINUTES * 60 * 1000;
@@ -62,10 +66,14 @@ if (TRUST_PROXY) {
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: {
-    files: MAX_IMAGES_PER_POST,
-    fileSize: MAX_UPLOAD_FILE_SIZE_BYTES
+    files: MAX_FILES_PER_POST,
+    fileSize: MAX_MEDIA_UPLOAD_FILE_SIZE_BYTES
   }
 });
+const uploadPostMedia = upload.fields([
+  { name: 'photos', maxCount: MAX_IMAGES_PER_POST },
+  { name: 'video', maxCount: 1 }
+]);
 
 // Setup view engine and static
 app.set('view engine', 'ejs');
@@ -193,6 +201,9 @@ db.serialize(() => {
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     filename TEXT,
     originalname TEXT,
+    video_filename TEXT,
+    video_originalname TEXT,
+    video_mimetype TEXT,
     note TEXT,
     is_pinned INTEGER DEFAULT 0,
     created_at INTEGER,
@@ -250,6 +261,27 @@ db.serialize(() => {
       db.run('ALTER TABLE entries ADD COLUMN collection_id INTEGER', (alterErr) => {
         if (alterErr) console.error('entries collection_id migration error:', alterErr);
         else console.log('✓ Added collection_id column to entries');
+      });
+    }
+    const hasVideoFilename = Array.isArray(cols) && cols.some((col) => col.name === 'video_filename');
+    if (!hasVideoFilename) {
+      db.run('ALTER TABLE entries ADD COLUMN video_filename TEXT', (alterErr) => {
+        if (alterErr) console.error('entries video_filename migration error:', alterErr);
+        else console.log('✓ Added video_filename column to entries');
+      });
+    }
+    const hasVideoOriginalname = Array.isArray(cols) && cols.some((col) => col.name === 'video_originalname');
+    if (!hasVideoOriginalname) {
+      db.run('ALTER TABLE entries ADD COLUMN video_originalname TEXT', (alterErr) => {
+        if (alterErr) console.error('entries video_originalname migration error:', alterErr);
+        else console.log('✓ Added video_originalname column to entries');
+      });
+    }
+    const hasVideoMimetype = Array.isArray(cols) && cols.some((col) => col.name === 'video_mimetype');
+    if (!hasVideoMimetype) {
+      db.run('ALTER TABLE entries ADD COLUMN video_mimetype TEXT', (alterErr) => {
+        if (alterErr) console.error('entries video_mimetype migration error:', alterErr);
+        else console.log('✓ Added video_mimetype column to entries');
       });
     }
     db.run('CREATE INDEX IF NOT EXISTS idx_entries_created_at ON entries(created_at)');
@@ -595,6 +627,34 @@ async function storeUploadedFile(file) {
   }
 
   return { key, originalname: file.originalname || null };
+}
+
+function getUploadFieldFiles(req, fieldName) {
+  if (!req || !req.files || typeof req.files !== 'object' || Array.isArray(req.files)) return [];
+  const files = req.files[fieldName];
+  return Array.isArray(files) ? files : [];
+}
+
+function validateUploadedMedia(photos, videoFile) {
+  if (!Array.isArray(photos)) return 'Invalid image upload payload.';
+  for (const file of photos) {
+    if (!file || typeof file !== 'object') return 'Invalid image upload payload.';
+    if (!String(file.mimetype || '').startsWith('image/')) {
+      return 'Only image files are allowed for photos.';
+    }
+    if (Number(file.size || 0) > MAX_UPLOAD_FILE_SIZE_BYTES) {
+      return `Each image must be ${MAX_UPLOAD_FILE_SIZE_MB}MB or smaller.`;
+    }
+  }
+  if (videoFile) {
+    if (!String(videoFile.mimetype || '').startsWith('video/')) {
+      return 'Video must be a valid video file type.';
+    }
+    if (Number(videoFile.size || 0) > MAX_VIDEO_FILE_SIZE_BYTES) {
+      return `Video must be ${MAX_VIDEO_FILE_SIZE_MB}MB or smaller.`;
+    }
+  }
+  return null;
 }
 
 function ensureAuth(req, res, next) {
@@ -1049,13 +1109,19 @@ app.get('/', async (req, res) => {
   }
 });
 
-app.post('/upload', ensureAuth, upload.array('photos', MAX_IMAGES_PER_POST), verifyCsrfToken, async (req, res) => {
+app.post('/upload', ensureAuth, uploadPostMedia, verifyCsrfToken, async (req, res) => {
   const note = req.body.note || '';
   const tagsInput = req.body.tags || '';
   const collectionName = req.body.collection || '';
   const saveAsDraft = String(req.body.saveAsDraft || '').trim() === '1' || req.body.saveAsDraft === 'on';
-  const files = Array.isArray(req.files) ? req.files : [];
-  const storedFiles = [];
+  const photoFiles = getUploadFieldFiles(req, 'photos');
+  const videoFile = getUploadFieldFiles(req, 'video')[0] || null;
+  const mediaError = validateUploadedMedia(photoFiles, videoFile);
+  if (mediaError) {
+    return res.status(400).send(mediaError);
+  }
+  const storedPhotos = [];
+  let storedVideo = null;
 
   try {
     const { startMs, endMs } = getDayRangeMs();
@@ -1064,22 +1130,30 @@ app.post('/upload', ensureAuth, upload.array('photos', MAX_IMAGES_PER_POST), ver
       return res.redirect('/?error=daily_limit');
     }
 
-    for (const file of files) {
+    for (const file of photoFiles) {
       const stored = await storeUploadedFile(file);
-      storedFiles.push(stored);
+      storedPhotos.push(stored);
+    }
+    if (videoFile) {
+      const stored = await storeUploadedFile(videoFile);
+      storedVideo = { ...stored, mimetype: videoFile.mimetype || null };
     }
 
-    const first = storedFiles[0] || null;
+    const first = storedPhotos[0] || null;
     const createdAt = Date.now();
     const collectionId = await getOrCreateCollectionId(req.session.userId, collectionName);
     const isDraft = saveAsDraft ? 1 : 0;
     const insertResult = await dbRunAsync(
       `INSERT INTO entries(
-        filename, originalname, note, is_pinned, created_at, user_id, is_draft, collection_id
-      ) VALUES (?,?,?,?,?,?,?,?)`,
+        filename, originalname, video_filename, video_originalname, video_mimetype, note,
+        is_pinned, created_at, user_id, is_draft, collection_id
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
       [
         first ? first.key : null,
         first ? first.originalname : null,
+        storedVideo ? storedVideo.key : null,
+        storedVideo ? storedVideo.originalname : null,
+        storedVideo ? storedVideo.mimetype : null,
         note,
         0,
         createdAt,
@@ -1089,8 +1163,8 @@ app.post('/upload', ensureAuth, upload.array('photos', MAX_IMAGES_PER_POST), ver
       ]
     );
 
-    for (let i = 0; i < storedFiles.length; i += 1) {
-      const item = storedFiles[i];
+    for (let i = 0; i < storedPhotos.length; i += 1) {
+      const item = storedPhotos[i];
       await dbRunAsync(
         'INSERT INTO entry_images(entry_id, filename, originalname, sort_order) VALUES (?,?,?,?)',
         [insertResult.lastID, item.key, item.originalname, i]
@@ -1098,14 +1172,17 @@ app.post('/upload', ensureAuth, upload.array('photos', MAX_IMAGES_PER_POST), ver
     }
     await setEntryTags(insertResult.lastID, tagsInput);
     await appendAuditLog(req, 'entry.create', 'entry', insertResult.lastID, {
-      imageCount: storedFiles.length,
+      imageCount: storedPhotos.length,
+      hasVideo: Boolean(storedVideo),
       isDraft: isDraft === 1
     });
 
     res.redirect('/');
   } catch (err) {
     console.error(err);
-    await Promise.allSettled(storedFiles.map((item) => deleteStoredFile(item.key)));
+    const cleanup = storedPhotos.map((item) => deleteStoredFile(item.key));
+    if (storedVideo) cleanup.push(deleteStoredFile(storedVideo.key));
+    await Promise.allSettled(cleanup);
     res.status(500).send('Upload error');
   }
 });
@@ -1206,7 +1283,7 @@ app.get('/entries/:id/edit', ensureOwnerOrAdmin, async (req, res) => {
   }
 });
 
-app.post('/entries/:id/edit', ensureOwnerOrAdmin, upload.array('photos', MAX_IMAGES_PER_POST), verifyCsrfToken, async (req, res) => {
+app.post('/entries/:id/edit', ensureOwnerOrAdmin, uploadPostMedia, verifyCsrfToken, async (req, res) => {
   const entryId = Number.parseInt(req.params.id, 10);
   if (!Number.isInteger(entryId) || entryId <= 0) {
     return res.status(400).send('Invalid entry id');
@@ -1217,14 +1294,17 @@ app.post('/entries/:id/edit', ensureOwnerOrAdmin, upload.array('photos', MAX_IMA
   const collectionName = req.body.collection || '';
   const saveAsDraft = String(req.body.saveAsDraft || '').trim() === '1' || req.body.saveAsDraft === 'on';
   const removeAllPhotos = req.body.removeAllPhotos === 'on';
+  const removeVideo = req.body.removeVideo === 'on';
   const removeImageIdsRaw = req.body.removeImageIds;
   const removeImageIds = new Set(
     (Array.isArray(removeImageIdsRaw) ? removeImageIdsRaw : [removeImageIdsRaw])
       .map((value) => Number.parseInt(value, 10))
       .filter((value) => Number.isInteger(value) && value > 0)
   );
-  const newFiles = Array.isArray(req.files) ? req.files : [];
-  const newlyStored = [];
+  const newImageFiles = getUploadFieldFiles(req, 'photos');
+  const newVideoFile = getUploadFieldFiles(req, 'video')[0] || null;
+  const newlyStoredImages = [];
+  let newlyStoredVideo = null;
 
   try {
     const row = await dbGetAsync('SELECT * FROM entries WHERE id = ?', [entryId]);
@@ -1232,11 +1312,28 @@ app.post('/entries/:id/edit', ensureOwnerOrAdmin, upload.array('photos', MAX_IMA
     if (row.deleted_at != null) return res.status(400).send('Cannot edit a deleted post. Restore it first.');
 
     const existingImages = await getEntryImagesForEntry(entryId, row);
+    const mediaError = validateUploadedMedia(newImageFiles, newVideoFile);
+    if (mediaError) {
+      return res.status(400).render('edit', {
+        entry: {
+          ...row,
+          images: existingImages,
+          tags: normalizeTagList(tagsInput),
+          tagText: String(tagsInput || ''),
+          collection_name: normalizeCollectionName(collectionName),
+          is_draft: saveAsDraft ? 1 : 0
+        },
+        error: mediaError,
+        maxImagesPerPost: MAX_IMAGES_PER_POST,
+        userCollections: await getUserCollections(req.session.userId)
+      });
+    }
+
     const imagesToRemove = removeAllPhotos
       ? existingImages
       : existingImages.filter((image) => removeImageIds.has(image.id));
     const retainedCount = existingImages.length - imagesToRemove.length;
-    if (retainedCount + newFiles.length > MAX_IMAGES_PER_POST) {
+    if (retainedCount + newImageFiles.length > MAX_IMAGES_PER_POST) {
       return res.status(400).render('edit', {
         entry: {
           ...row,
@@ -1252,9 +1349,13 @@ app.post('/entries/:id/edit', ensureOwnerOrAdmin, upload.array('photos', MAX_IMA
       });
     }
 
-    for (const file of newFiles) {
+    for (const file of newImageFiles) {
       const stored = await storeUploadedFile(file);
-      newlyStored.push(stored);
+      newlyStoredImages.push(stored);
+    }
+    if (newVideoFile) {
+      const stored = await storeUploadedFile(newVideoFile);
+      newlyStoredVideo = { ...stored, mimetype: newVideoFile.mimetype || null };
     }
 
     if (imagesToRemove.length > 0) {
@@ -1282,12 +1383,28 @@ app.post('/entries/:id/edit', ensureOwnerOrAdmin, upload.array('photos', MAX_IMA
 
     const currentCountRow = await dbGetAsync('SELECT COUNT(*) AS c FROM entry_images WHERE entry_id = ?', [entryId]);
     let nextSort = currentCountRow?.c || 0;
-    for (const item of newlyStored) {
+    for (const item of newlyStoredImages) {
       await dbRunAsync(
         'INSERT INTO entry_images(entry_id, filename, originalname, sort_order) VALUES (?,?,?,?)',
         [entryId, item.key, item.originalname, nextSort]
       );
       nextSort += 1;
+    }
+
+    let nextVideoFilename = row.video_filename || null;
+    let nextVideoOriginalname = row.video_originalname || null;
+    let nextVideoMimetype = row.video_mimetype || null;
+    let videoToDelete = null;
+    if (newlyStoredVideo) {
+      videoToDelete = row.video_filename || null;
+      nextVideoFilename = newlyStoredVideo.key;
+      nextVideoOriginalname = newlyStoredVideo.originalname;
+      nextVideoMimetype = newlyStoredVideo.mimetype;
+    } else if (removeVideo) {
+      videoToDelete = row.video_filename || null;
+      nextVideoFilename = null;
+      nextVideoOriginalname = null;
+      nextVideoMimetype = null;
     }
 
     const firstImage = await dbGetAsync(
@@ -1300,11 +1417,15 @@ app.post('/entries/:id/edit', ensureOwnerOrAdmin, upload.array('photos', MAX_IMA
 
     await dbRunAsync(
       `UPDATE entries
-       SET filename = ?, originalname = ?, note = ?, is_draft = ?, collection_id = ?, is_pinned = ?
+       SET filename = ?, originalname = ?, video_filename = ?, video_originalname = ?, video_mimetype = ?,
+           note = ?, is_draft = ?, collection_id = ?, is_pinned = ?
        WHERE id = ?`,
       [
         firstImage ? firstImage.filename : null,
         firstImage ? firstImage.originalname : null,
+        nextVideoFilename,
+        nextVideoOriginalname,
+        nextVideoMimetype,
         note,
         isDraft,
         collectionId,
@@ -1312,16 +1433,30 @@ app.post('/entries/:id/edit', ensureOwnerOrAdmin, upload.array('photos', MAX_IMA
         entryId
       ]
     );
+
+    if (videoToDelete) {
+      try {
+        await deleteStoredFile(videoToDelete);
+      } catch (fileErr) {
+        if (fileErr.code !== 'ENOENT' && fileErr.name !== 'NoSuchKey') {
+          console.error('Video delete error:', fileErr);
+        }
+      }
+    }
+
     await setEntryTags(entryId, tagsInput);
     await appendAuditLog(req, 'entry.edit', 'entry', entryId, {
-      imageCount: currentCountRow?.c || 0,
+      imageCount: nextSort,
+      hasVideo: Boolean(nextVideoFilename),
       isDraft: isDraft === 1
     });
 
     res.redirect(`/entries/${entryId}`);
   } catch (err) {
     console.error(err);
-    await Promise.allSettled(newlyStored.map((item) => deleteStoredFile(item.key)));
+    const cleanup = newlyStoredImages.map((item) => deleteStoredFile(item.key));
+    if (newlyStoredVideo) cleanup.push(deleteStoredFile(newlyStoredVideo.key));
+    await Promise.allSettled(cleanup);
     res.status(500).send('Edit error');
   }
 });
@@ -1616,12 +1751,15 @@ app.post('/admin/users/:id/delete', ensureAdmin, verifyCsrfToken, async (req, re
       }
     }
 
-    // Delete user's entries and associated images
-    const entries = await dbAllAsync('SELECT id FROM entries WHERE user_id = ?', [targetUserId]);
+    // Delete user's entries and associated media
+    const entries = await dbAllAsync('SELECT id, video_filename FROM entries WHERE user_id = ?', [targetUserId]);
     for (const entry of entries) {
       const images = await dbAllAsync('SELECT filename FROM entry_images WHERE entry_id = ?', [entry.id]);
       for (const img of images) {
         await deleteStoredFile(img.filename);
+      }
+      if (entry.video_filename) {
+        await deleteStoredFile(entry.video_filename);
       }
       await dbRunAsync('DELETE FROM comments WHERE entry_id = ?', [entry.id]);
       await dbRunAsync('DELETE FROM entry_reactions WHERE entry_id = ?', [entry.id]);
@@ -1997,10 +2135,19 @@ app.locals.fileUrl = function(filename) {
 
 app.use((err, req, res, next) => {
   if (err instanceof multer.MulterError && err.code === 'LIMIT_FILE_COUNT') {
-    return res.status(400).send(`You can upload up to ${MAX_IMAGES_PER_POST} images per post.`);
+    return res.status(400).send(`You can upload up to ${MAX_IMAGES_PER_POST} images and 1 video per post.`);
   }
   if (err instanceof multer.MulterError && err.code === 'LIMIT_FILE_SIZE') {
-    return res.status(400).send(`Each image must be ${MAX_UPLOAD_FILE_SIZE_MB}MB or smaller.`);
+    return res.status(400).send(`Each uploaded file must be ${Math.max(MAX_UPLOAD_FILE_SIZE_MB, MAX_VIDEO_FILE_SIZE_MB)}MB or smaller.`);
+  }
+  if (err instanceof multer.MulterError && err.code === 'LIMIT_UNEXPECTED_FILE') {
+    if (err.field === 'photos') {
+      return res.status(400).send(`You can upload up to ${MAX_IMAGES_PER_POST} images per post.`);
+    }
+    if (err.field === 'video') {
+      return res.status(400).send('You can upload only 1 video per post.');
+    }
+    return res.status(400).send(`Unexpected upload field "${err.field || 'unknown'}".`);
   }
   if (err) {
     console.error(err);

@@ -282,6 +282,73 @@ a:hover{color:#0f5078}
 .upload-form button:hover,
 .auth-form button:hover{transform:translateY(-1px)}
 
+.create-post-form{
+  gap:8px;
+  padding:12px;
+}
+
+.create-post-form label{
+  font-size:12px;
+  letter-spacing:.1px;
+  text-transform:none;
+}
+
+.create-post-form .form-field{
+  display:grid;
+  gap:5px;
+}
+
+.create-post-form textarea{min-height:78px}
+
+.create-post-form input[type=file]{
+  padding:8px;
+  line-height:1.25;
+}
+
+.create-post-form input[type=file]::file-selector-button{
+  margin-right:10px;
+  border:1px solid var(--field-border);
+  border-radius:8px;
+  padding:6px 10px;
+  background:color-mix(in srgb, var(--secondary-soft) 72%, white);
+  color:var(--secondary);
+  font:inherit;
+  font-weight:600;
+  cursor:pointer;
+}
+
+.create-post-grid{
+  display:grid;
+  grid-template-columns:repeat(2,minmax(0,1fr));
+  gap:8px;
+}
+
+.draft-row{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:12px;
+}
+
+.draft-row label{
+  display:flex;
+  align-items:center;
+  gap:8px;
+  margin:0;
+  font-weight:600;
+}
+
+.draft-row input[type=checkbox]{
+  width:16px;
+  height:16px;
+  margin:0;
+}
+
+.draft-row button{
+  width:auto;
+  min-width:130px;
+}
+
 .upload-preview{
   display:grid;
   gap:8px;
@@ -290,6 +357,8 @@ a:hover{color:#0f5078}
   border-radius:12px;
   background:color-mix(in srgb, var(--field-bg) 88%, white);
 }
+
+.upload-preview[hidden]{display:none !important}
 
 .upload-preview img{
   display:block;
@@ -968,6 +1037,8 @@ body.has-action-sidebar.sidebar-collapsed{
   .container{margin:14px;padding:16px;border-radius:16px}
   .brand-title{font-size:clamp(30px,11vw,44px)}
   .entries{grid-template-columns:1fr}
+  .create-post-grid{grid-template-columns:1fr}
+  .draft-row{flex-direction:column;align-items:stretch}
   .entry-images.is-multi img{height:148px}
   .entry-images-more{height:148px}
   .upload-form button,.auth-form button{width:100%}

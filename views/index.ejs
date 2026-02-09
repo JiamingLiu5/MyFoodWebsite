@@ -102,10 +102,12 @@
       </div>
 
       <% if (userId) { %>
-        <form action="/upload" method="post" enctype="multipart/form-data" class="upload-form">
+        <form action="/upload" method="post" enctype="multipart/form-data" class="upload-form create-post-form">
           <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
-          <label>Photos (optional, up to <%= maxImagesPerPost %>)</label>
-          <input type="file" name="photos" accept="image/*" multiple />
+          <div class="form-field">
+            <label>Photos (optional, up to <%= maxImagesPerPost %>)</label>
+            <input type="file" name="photos" accept="image/*" multiple />
+          </div>
           <div class="upload-preview" id="uploadPreview" hidden>
             <img id="uploadPreviewImg" alt="Selected photo preview" />
             <div class="upload-preview-meta">
@@ -114,22 +116,32 @@
             </div>
           </div>
           <p id="uploadPreviewError" class="upload-preview-error" hidden></p>
-          <label>Note</label>
-          <textarea name="note" rows="3" placeholder="Write something about this photo..."></textarea>
-          <label>Tags (comma separated)</label>
-          <input name="tags" placeholder="spicy, sushi, weekend" />
-          <label>Collection</label>
-          <input list="collectionCreateOptions" name="collection" placeholder="e.g. Office Lunches" />
+          <div class="form-field">
+            <label>Note</label>
+            <textarea name="note" rows="3" placeholder="Write something about this photo..."></textarea>
+          </div>
+          <div class="create-post-grid">
+            <div class="form-field">
+              <label>Tags (comma separated)</label>
+              <input name="tags" placeholder="spicy, sushi, weekend" />
+            </div>
+            <div class="form-field">
+              <label>Collection</label>
+              <input list="collectionCreateOptions" name="collection" placeholder="e.g. Office Lunches" />
+            </div>
+          </div>
           <datalist id="collectionCreateOptions">
             <% userCollections.forEach(function(c) { %>
               <option value="<%= c.name %>"></option>
             <% }) %>
           </datalist>
-          <label>
-            <input type="checkbox" name="saveAsDraft" value="1" />
-            Save as draft (visible only to you and admins)
-          </label>
-          <button type="submit">Save Post</button>
+          <div class="draft-row">
+            <label>
+              <input type="checkbox" name="saveAsDraft" value="1" />
+              Save as draft (visible only to you and admins)
+            </label>
+            <button type="submit">Save Post</button>
+          </div>
         </form>
       <% } %>
 

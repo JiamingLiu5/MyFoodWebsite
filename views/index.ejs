@@ -217,7 +217,13 @@
                   </div>
                 <% } %>
                 <div class="author-note">
-                  Author: <strong><%= e.author_label || e.author_username || 'Unknown user' %></strong>
+                  <% const effectiveAuthor = e.author_label || e.author_username || ''; %>
+                  Author:
+                  <% if (effectiveAuthor) { %>
+                    <a class="author-link" href="/?author=<%= encodeURIComponent(effectiveAuthor) %>"><strong><%= effectiveAuthor %></strong></a>
+                  <% } else { %>
+                    <strong>Unknown user</strong>
+                  <% } %>
                   <% if (e.author_label && e.author_username) { %>
                     <span>(account: <%= e.author_username %>)</span>
                   <% } %>

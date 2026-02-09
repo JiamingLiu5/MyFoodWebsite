@@ -465,6 +465,12 @@ body.enable-reveal .entry.is-visible{opacity:1;transform:translateY(0) scale(1)}
 .note{font-size:clamp(20px,2.2vw,34px);line-height:1.12;font-family:'Cinzel',serif;color:color-mix(in srgb, var(--text) 92%, black)}
 .time{font-size:13px;color:var(--muted);margin-top:6px}
 .author-note{font-size:12px;color:var(--muted);margin-top:6px;font-weight:700}
+.author-link{color:var(--secondary);text-decoration:none}
+.author-link:hover{text-decoration:underline}
+.author-link:focus-visible{
+  outline:2px solid color-mix(in srgb, var(--secondary) 55%, white);
+  outline-offset:2px;
+}
 .pin-badge{display:inline-block;padding:2px 8px;border-radius:999px;background:var(--pin-bg);color:var(--pin-text);font-size:12px;margin-bottom:8px;border:1px solid var(--pin-border)}
 .tags-row{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
 .tag-chip{

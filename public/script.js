@@ -1,3 +1,30 @@
+const THEME_STORAGE_KEY = 'myfood_theme_v1';
+const THEME_PRESETS = [
+  { id: 'sunkeep', name: 'Sunkeep' },
+  { id: 'moonharbor', name: 'Moonharbor' },
+  { id: 'wildgrove', name: 'Wildgrove' }
+];
+
+function resolveTheme(themeId) {
+  const match = THEME_PRESETS.find((theme) => theme.id === themeId);
+  return match ? match.id : THEME_PRESETS[0].id;
+}
+
+function applyTheme(themeId) {
+  const resolved = resolveTheme(themeId);
+  document.documentElement.setAttribute('data-theme', resolved);
+  return resolved;
+}
+
+(() => {
+  try {
+    const savedTheme = window.localStorage.getItem(THEME_STORAGE_KEY);
+    applyTheme(savedTheme);
+  } catch (err) {
+    applyTheme(null);
+  }
+})();
+
 document.addEventListener('DOMContentLoaded', () => {
   const loadingBar = document.createElement('div');
   loadingBar.className = 'page-loading-bar';
@@ -6,6 +33,79 @@ document.addEventListener('DOMContentLoaded', () => {
     loadingBar.classList.add('is-done');
     window.setTimeout(() => loadingBar.remove(), 380);
   }, 450);
+
+  let activeTheme = applyTheme(document.documentElement.getAttribute('data-theme'));
+  const themeSwitcher = document.createElement('div');
+  themeSwitcher.className = 'theme-switcher';
+  themeSwitcher.innerHTML = `
+    <button class="theme-toggle" type="button" aria-haspopup="true" aria-expanded="false" aria-label="Open theme switcher">
+      <span>Realm</span>
+      <strong class="theme-toggle-name"></strong>
+    </button>
+    <div class="theme-menu" role="menu" aria-label="Theme options">
+      ${THEME_PRESETS.map((theme) => `
+        <button class="theme-option" type="button" role="menuitemradio" data-theme="${theme.id}">
+          <span class="theme-option-name">${theme.name}</span>
+          <span class="theme-option-dot"></span>
+        </button>
+      `).join('')}
+    </div>
+  `;
+  document.body.appendChild(themeSwitcher);
+
+  const themeToggleBtn = themeSwitcher.querySelector('.theme-toggle');
+  const themeName = themeSwitcher.querySelector('.theme-toggle-name');
+  const themeOptions = Array.from(themeSwitcher.querySelectorAll('.theme-option'));
+
+  function syncThemeUI(themeId) {
+    const selectedTheme = THEME_PRESETS.find((theme) => theme.id === themeId) || THEME_PRESETS[0];
+    if (themeName) themeName.textContent = selectedTheme.name;
+    themeOptions.forEach((option) => {
+      const isActive = option.dataset.theme === selectedTheme.id;
+      option.classList.toggle('is-active', isActive);
+      option.setAttribute('aria-checked', String(isActive));
+    });
+  }
+
+  function setTheme(themeId, options = {}) {
+    const persist = options.persist !== false;
+    activeTheme = applyTheme(themeId);
+    if (persist) {
+      try {
+        window.localStorage.setItem(THEME_STORAGE_KEY, activeTheme);
+      } catch (err) {
+        // Ignore storage failures in private browsing modes.
+      }
+    }
+    syncThemeUI(activeTheme);
+  }
+
+  function setMenuOpen(isOpen) {
+    themeSwitcher.classList.toggle('is-open', isOpen);
+    themeToggleBtn.setAttribute('aria-expanded', String(isOpen));
+  }
+
+  setTheme(activeTheme, { persist: false });
+
+  themeToggleBtn.addEventListener('click', () => {
+    const isOpen = !themeSwitcher.classList.contains('is-open');
+    setMenuOpen(isOpen);
+  });
+
+  themeOptions.forEach((option) => {
+    option.addEventListener('click', () => {
+      setTheme(option.dataset.theme || THEME_PRESETS[0].id);
+      setMenuOpen(false);
+    });
+  });
+
+  document.addEventListener('click', (event) => {
+    if (!themeSwitcher.contains(event.target)) setMenuOpen(false);
+  });
+
+  window.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') setMenuOpen(false);
+  });
 
   const entries = Array.from(document.querySelectorAll('.entry'));
   if (entries.length) {

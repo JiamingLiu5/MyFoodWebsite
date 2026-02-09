@@ -107,6 +107,139 @@ document.addEventListener('DOMContentLoaded', () => {
     if (event.key === 'Escape') setMenuOpen(false);
   });
 
+  const searchToggleBtn = document.getElementById('searchToggleBtn');
+  const searchPanel = document.getElementById('searchPanel');
+  if (searchToggleBtn && searchPanel) {
+    function setSearchOpen(isOpen) {
+      searchPanel.hidden = !isOpen;
+      searchToggleBtn.setAttribute('aria-expanded', String(isOpen));
+      searchToggleBtn.textContent = isOpen ? 'Hide Search' : 'Show Search';
+    }
+
+    setSearchOpen(searchToggleBtn.getAttribute('aria-expanded') === 'true');
+    searchToggleBtn.addEventListener('click', () => {
+      const isOpen = searchToggleBtn.getAttribute('aria-expanded') !== 'true';
+      setSearchOpen(isOpen);
+    });
+  }
+
+  function buildSidebarButton(href, label) {
+    const link = document.createElement('a');
+    link.href = href;
+    link.className = 'sidebar-btn';
+    link.textContent = label;
+    return link;
+  }
+
+  function normalizeLabel(text) {
+    return String(text || '').replace(/\s+/g, ' ').trim();
+  }
+
+  function getCurrentPath() {
+    return `${window.location.pathname}${window.location.search || ''}`;
+  }
+
+  const actionSidebar = document.createElement('aside');
+  actionSidebar.className = 'action-sidebar';
+  const sidebarMain = document.createElement('div');
+  sidebarMain.className = 'action-sidebar-main';
+  const sidebarInfo = document.createElement('div');
+  sidebarInfo.className = 'action-sidebar-info';
+  const addedSidebarKeys = new Set();
+
+  function addSidebarInfo(text) {
+    const label = normalizeLabel(text);
+    if (!label) return;
+    const info = document.createElement('div');
+    info.className = 'sidebar-info';
+    info.textContent = label;
+    sidebarInfo.appendChild(info);
+  }
+
+  function addSidebarLink(href, text) {
+    const label = normalizeLabel(text);
+    if (!href || !label) return;
+    const key = `link:${href}:${label.toLowerCase()}`;
+    if (addedSidebarKeys.has(key)) return;
+    addedSidebarKeys.add(key);
+    const btn = buildSidebarButton(href, label);
+    if (href === getCurrentPath() || href === window.location.pathname) {
+      btn.classList.add('is-active');
+    }
+    sidebarMain.appendChild(btn);
+  }
+
+  function addSidebarForm(formNode) {
+    if (!formNode) return;
+    const action = formNode.getAttribute('action') || '';
+    const key = `form:${formNode.getAttribute('method') || 'get'}:${action}`;
+    if (addedSidebarKeys.has(key)) return;
+    addedSidebarKeys.add(key);
+    const cloned = formNode.cloneNode(true);
+    cloned.classList.add('sidebar-form');
+    const button = cloned.querySelector('button');
+    if (button) {
+      button.className = 'sidebar-btn';
+      const currentLabel = normalizeLabel(button.textContent);
+      button.textContent = currentLabel || 'Submit';
+    }
+    sidebarMain.appendChild(cloned);
+  }
+
+  if (searchToggleBtn) {
+    searchToggleBtn.classList.add('sidebar-btn');
+    sidebarMain.appendChild(searchToggleBtn);
+  }
+
+  const topNavs = Array.from(document.querySelectorAll('.top-nav'));
+  let hasLogoutControl = false;
+  topNavs.forEach((topNav) => {
+    const infoNodes = Array.from(topNav.children).filter((child) => child.tagName === 'SPAN');
+    infoNodes.forEach((node) => {
+      addSidebarInfo(node.textContent);
+      node.remove();
+    });
+
+    const links = Array.from(topNav.querySelectorAll('a[href]'));
+    links.forEach((link) => {
+      addSidebarLink(link.getAttribute('href'), link.textContent);
+      link.remove();
+    });
+
+    const forms = Array.from(topNav.querySelectorAll('form'));
+    forms.forEach((formNode) => {
+      if ((formNode.getAttribute('action') || '').trim() === '/logout') {
+        hasLogoutControl = true;
+      }
+      addSidebarForm(formNode);
+      formNode.remove();
+    });
+
+    if (!topNav.querySelector('a, form, button, span')) {
+      topNav.classList.add('is-empty');
+    }
+  });
+
+  if (!hasLogoutControl) {
+    const hasLoginHint = Boolean(document.querySelector('a[href="/login"]')) || window.location.pathname === '/register';
+    const hasRegisterHint = Boolean(document.querySelector('a[href="/register"]')) || window.location.pathname === '/login';
+    if (hasLoginHint) addSidebarLink('/login', 'Login');
+    if (hasRegisterHint) addSidebarLink('/register', 'Register');
+  }
+
+  if (!addedSidebarKeys.has('link:/:home')) {
+    addSidebarLink('/', 'Home');
+  }
+
+  themeSwitcher.classList.add('theme-switcher-in-sidebar');
+  if (sidebarInfo.childElementCount > 0) {
+    actionSidebar.appendChild(sidebarInfo);
+  }
+  actionSidebar.appendChild(sidebarMain);
+  actionSidebar.appendChild(themeSwitcher);
+  document.body.appendChild(actionSidebar);
+  document.body.classList.add('has-action-sidebar');
+
   const entries = Array.from(document.querySelectorAll('.entry'));
   if (entries.length) {
     document.body.classList.add('enable-reveal');

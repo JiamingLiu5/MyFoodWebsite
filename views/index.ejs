@@ -48,42 +48,57 @@
         <p class="status-note"><em>Viewing pinned published posts only. <a href="/login">Login</a> or <a href="/register">register</a> to create posts.</em></p>
       <% } %>
 
-      <form action="/" method="get" class="upload-form search-form">
-        <label>Search</label>
-        <input type="text" name="q" value="<%= filters.q %>" placeholder="notes, username, collection, tags..." />
-        <label>Tag</label>
-        <input type="text" name="tag" value="<%= filters.tag %>" placeholder="e.g. ramen" />
-        <label>Collection</label>
-        <input list="collectionFilterOptions" name="collection" value="<%= filters.collection %>" placeholder="e.g. date night" />
-        <datalist id="collectionFilterOptions">
-          <% filterCollections.forEach(function(c) { %>
-            <option value="<%= c.name %>"></option>
-          <% }) %>
-        </datalist>
-        <label>Author</label>
-        <input type="text" name="author" value="<%= filters.author %>" placeholder="username" />
-        <label>From</label>
-        <input type="date" name="from" value="<%= filters.from %>" />
-        <label>To</label>
-        <input type="date" name="to" value="<%= filters.to %>" />
-        <% if (userId) { %>
-          <label>Visibility</label>
-          <select name="visibility">
-            <option value="all" <%= filters.visibility === 'all' ? 'selected' : '' %>>All</option>
-            <option value="published" <%= filters.visibility === 'published' ? 'selected' : '' %>>Published only</option>
-            <option value="drafts" <%= filters.visibility === 'drafts' ? 'selected' : '' %>>Drafts only</option>
-          </select>
-          <label>Status</label>
-          <select name="deleted">
-            <option value="0" <%= filters.deleted !== '1' ? 'selected' : '' %>>Active</option>
-            <option value="1" <%= filters.deleted === '1' ? 'selected' : '' %>>Trash</option>
-          </select>
-        <% } %>
-        <div class="entry-actions">
-          <button type="submit">Apply Filters</button>
-          <a class="view-btn" href="/">Clear</a>
-        </div>
-      </form>
+      <% const hasActiveFilters = Boolean(
+        filters.q || filters.tag || filters.collection || filters.author || filters.from || filters.to ||
+        (userId && ((filters.visibility && filters.visibility !== 'all') || filters.deleted === '1'))
+      ); %>
+      <button
+        class="top-nav-btn search-toggle-btn"
+        id="searchToggleBtn"
+        type="button"
+        aria-controls="searchPanel"
+        aria-expanded="<%= hasActiveFilters ? 'true' : 'false' %>"
+      >
+        <%= hasActiveFilters ? 'Hide Search' : 'Show Search' %>
+      </button>
+      <div id="searchPanel" class="search-panel" <%= hasActiveFilters ? '' : 'hidden' %>>
+        <form action="/" method="get" class="upload-form search-form">
+          <label>Search</label>
+          <input type="text" name="q" value="<%= filters.q %>" placeholder="notes, username, collection, tags..." />
+          <label>Tag</label>
+          <input type="text" name="tag" value="<%= filters.tag %>" placeholder="e.g. ramen" />
+          <label>Collection</label>
+          <input list="collectionFilterOptions" name="collection" value="<%= filters.collection %>" placeholder="e.g. date night" />
+          <datalist id="collectionFilterOptions">
+            <% filterCollections.forEach(function(c) { %>
+              <option value="<%= c.name %>"></option>
+            <% }) %>
+          </datalist>
+          <label>Author</label>
+          <input type="text" name="author" value="<%= filters.author %>" placeholder="username" />
+          <label>From</label>
+          <input type="date" name="from" value="<%= filters.from %>" />
+          <label>To</label>
+          <input type="date" name="to" value="<%= filters.to %>" />
+          <% if (userId) { %>
+            <label>Visibility</label>
+            <select name="visibility">
+              <option value="all" <%= filters.visibility === 'all' ? 'selected' : '' %>>All</option>
+              <option value="published" <%= filters.visibility === 'published' ? 'selected' : '' %>>Published only</option>
+              <option value="drafts" <%= filters.visibility === 'drafts' ? 'selected' : '' %>>Drafts only</option>
+            </select>
+            <label>Status</label>
+            <select name="deleted">
+              <option value="0" <%= filters.deleted !== '1' ? 'selected' : '' %>>Active</option>
+              <option value="1" <%= filters.deleted === '1' ? 'selected' : '' %>>Trash</option>
+            </select>
+          <% } %>
+          <div class="entry-actions">
+            <button type="submit">Apply Filters</button>
+            <a class="view-btn" href="/">Clear</a>
+          </div>
+        </form>
+      </div>
 
       <% if (userId) { %>
         <form action="/upload" method="post" enctype="multipart/form-data" class="upload-form">

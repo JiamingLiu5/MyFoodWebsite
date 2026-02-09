@@ -81,6 +81,8 @@
         <textarea name="note" rows="4" placeholder="Update your note..."><%= entry.note || '' %></textarea>
         <label>Tags (comma separated)</label>
         <input name="tags" value="<%= entry.tagText || '' %>" placeholder="spicy, sushi, weekend" />
+        <label>Author</label>
+        <input name="authorLabel" value="<%= entry.author_label || '' %>" placeholder="e.g. Dad, Mom, Kid A" />
         <label>Collection</label>
         <input list="collectionEditOptions" name="collection" value="<%= entry.collection_name || '' %>" placeholder="e.g. Office Lunches" />
         <datalist id="collectionEditOptions">

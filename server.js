@@ -212,6 +212,7 @@ db.serialize(() => {
     video_poster_filename TEXT,
     video_poster_originalname TEXT,
     note TEXT,
+    author_label TEXT,
     is_pinned INTEGER DEFAULT 0,
     created_at INTEGER,
     is_draft INTEGER DEFAULT 0,
@@ -268,6 +269,13 @@ db.serialize(() => {
       db.run('ALTER TABLE entries ADD COLUMN collection_id INTEGER', (alterErr) => {
         if (alterErr) console.error('entries collection_id migration error:', alterErr);
         else console.log('✓ Added collection_id column to entries');
+      });
+    }
+    const hasAuthorLabel = Array.isArray(cols) && cols.some((col) => col.name === 'author_label');
+    if (!hasAuthorLabel) {
+      db.run('ALTER TABLE entries ADD COLUMN author_label TEXT', (alterErr) => {
+        if (alterErr) console.error('entries author_label migration error:', alterErr);
+        else console.log('✓ Added author_label column to entries');
       });
     }
     const hasVideoFilename = Array.isArray(cols) && cols.some((col) => col.name === 'video_filename');
@@ -1006,6 +1014,12 @@ function normalizeCollectionName(value) {
   return normalized.slice(0, 60);
 }
 
+function normalizeAuthorLabel(value) {
+  const normalized = String(value || '').trim().replace(/\s+/g, ' ');
+  if (!normalized) return '';
+  return normalized.slice(0, 60);
+}
+
 async function getOrCreateCollectionId(userId, collectionName) {
   const normalized = normalizeCollectionName(collectionName);
   if (!normalized || !userId) return null;
@@ -1215,6 +1229,7 @@ app.get('/', async (req, res) => {
       const search = `%${filters.q}%`;
       where.push(`(
         COALESCE(e.note, '') LIKE ?
+        OR COALESCE(e.author_label, '') LIKE ?
         OR COALESCE(u.username, '') LIKE ?
         OR COALESCE(c.name, '') LIKE ?
         OR EXISTS (
@@ -1224,7 +1239,7 @@ app.get('/', async (req, res) => {
           WHERE et.entry_id = e.id AND t.name LIKE ?
         )
       )`);
-      params.push(search, search, search, search);
+      params.push(search, search, search, search, search);
     }
 
     if (filters.tag) {
@@ -1245,7 +1260,7 @@ app.get('/', async (req, res) => {
     }
 
     if (filters.author) {
-      where.push('LOWER(COALESCE(u.username, \'\')) LIKE LOWER(?)');
+      where.push('LOWER(COALESCE(e.author_label, u.username, \'\')) LIKE LOWER(?)');
       params.push(`%${filters.author}%`);
     }
 
@@ -1323,6 +1338,7 @@ app.get('/', async (req, res) => {
 app.post('/upload', ensureAuth, uploadPostMedia, verifyCsrfToken, async (req, res) => {
   const note = req.body.note || '';
   const tagsInput = req.body.tags || '';
+  const authorLabel = normalizeAuthorLabel(req.body.authorLabel || '');
   const collectionName = req.body.collection || '';
   const saveAsDraft = String(req.body.saveAsDraft || '').trim() === '1' || req.body.saveAsDraft === 'on';
   const photoFiles = getUploadFieldFiles(req, 'photos');
@@ -1365,9 +1381,9 @@ app.post('/upload', ensureAuth, uploadPostMedia, verifyCsrfToken, async (req, re
     const insertResult = await dbRunAsync(
       `INSERT INTO entries(
         filename, originalname, video_filename, video_originalname, video_mimetype,
-        video_poster_filename, video_poster_originalname, note,
+        video_poster_filename, video_poster_originalname, note, author_label,
         is_pinned, created_at, user_id, is_draft, collection_id
-      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       [
         first ? first.key : null,
         first ? first.originalname : null,
@@ -1377,6 +1393,7 @@ app.post('/upload', ensureAuth, uploadPostMedia, verifyCsrfToken, async (req, re
         storedVideoPoster ? storedVideoPoster.key : null,
         storedVideoPoster ? storedVideoPoster.originalname : null,
         note,
+        authorLabel || null,
         0,
         createdAt,
         req.session.userId,
@@ -1517,6 +1534,7 @@ app.post('/entries/:id/edit', ensureOwnerOrAdmin, uploadPostMedia, verifyCsrfTok
 
   const note = req.body.note || '';
   const tagsInput = req.body.tags || '';
+  const authorLabel = normalizeAuthorLabel(req.body.authorLabel || '');
   const collectionName = req.body.collection || '';
   const saveAsDraft = String(req.body.saveAsDraft || '').trim() === '1' || req.body.saveAsDraft === 'on';
   const removeAllPhotos = req.body.removeAllPhotos === 'on';
@@ -1548,6 +1566,7 @@ app.post('/entries/:id/edit', ensureOwnerOrAdmin, uploadPostMedia, verifyCsrfTok
           images: existingImages,
           tags: normalizeTagList(tagsInput),
           tagText: String(tagsInput || ''),
+          author_label: authorLabel,
           collection_name: normalizeCollectionName(collectionName),
           is_draft: saveAsDraft ? 1 : 0
         },
@@ -1569,6 +1588,7 @@ app.post('/entries/:id/edit', ensureOwnerOrAdmin, uploadPostMedia, verifyCsrfTok
           images: existingImages,
           tags: normalizeTagList(tagsInput),
           tagText: String(tagsInput || ''),
+          author_label: authorLabel,
           collection_name: normalizeCollectionName(collectionName),
           is_draft: saveAsDraft ? 1 : 0
         },
@@ -1663,7 +1683,7 @@ app.post('/entries/:id/edit', ensureOwnerOrAdmin, uploadPostMedia, verifyCsrfTok
     await dbRunAsync(
       `UPDATE entries
        SET filename = ?, originalname = ?, video_filename = ?, video_originalname = ?, video_mimetype = ?,
-           video_poster_filename = ?, video_poster_originalname = ?, note = ?, is_draft = ?, collection_id = ?, is_pinned = ?
+           video_poster_filename = ?, video_poster_originalname = ?, note = ?, author_label = ?, is_draft = ?, collection_id = ?, is_pinned = ?
        WHERE id = ?`,
       [
         firstImage ? firstImage.filename : null,
@@ -1674,6 +1694,7 @@ app.post('/entries/:id/edit', ensureOwnerOrAdmin, uploadPostMedia, verifyCsrfTok
         nextVideoPosterFilename,
         nextVideoPosterOriginalname,
         note,
+        authorLabel || null,
         isDraft,
         collectionId,
         nextPinned,

@@ -65,7 +65,7 @@
       <div id="searchPanel" class="search-panel" <%= hasActiveFilters ? '' : 'hidden' %>>
         <form action="/" method="get" class="upload-form search-form">
           <label>Search</label>
-          <input type="text" name="q" value="<%= filters.q %>" placeholder="notes, username, collection, tags..." />
+          <input type="text" name="q" value="<%= filters.q %>" placeholder="notes, author, username, collection, tags..." />
           <label>Tag</label>
           <input type="text" name="tag" value="<%= filters.tag %>" placeholder="e.g. ramen" />
           <label>Collection</label>
@@ -76,7 +76,7 @@
             <% }) %>
           </datalist>
           <label>Author</label>
-          <input type="text" name="author" value="<%= filters.author %>" placeholder="username" />
+          <input type="text" name="author" value="<%= filters.author %>" placeholder="author label or username" />
           <label>From</label>
           <input type="date" name="from" value="<%= filters.from %>" />
           <label>To</label>
@@ -136,6 +136,10 @@
             <textarea name="note" rows="3" placeholder="Write something about this photo..."></textarea>
           </div>
           <div class="create-post-grid">
+            <div class="form-field">
+              <label>Author</label>
+              <input name="authorLabel" placeholder="e.g. Dad, Mom, Kid A" />
+            </div>
             <div class="form-field">
               <label>Tags (comma separated)</label>
               <input name="tags" placeholder="spicy, sushi, weekend" />
@@ -212,10 +216,13 @@
                     <% }) %>
                   </div>
                 <% } %>
+                <div class="author-note">
+                  Author: <strong><%= e.author_label || e.author_username || 'Unknown user' %></strong>
+                  <% if (e.author_label && e.author_username) { %>
+                    <span>(account: <%= e.author_username %>)</span>
+                  <% } %>
+                </div>
                 <div class="time"><%= new Date(e.created_at).toLocaleString() %></div>
-                <% if (userRole === 'admin') { %>
-                  <div class="author-note">Posted by: <%= e.author_username || 'Unknown user' %></div>
-                <% } %>
                 <div class="entry-actions">
                   <a class="view-btn" href="/entries/<%= e.id %>">View</a>
                   <% if (userRole === 'admin') { %>

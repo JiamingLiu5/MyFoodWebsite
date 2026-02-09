@@ -54,10 +54,13 @@
               <% }) %>
             </div>
           <% } %>
+          <div class="author-note">
+            Author: <strong><%= entry.author_label || entry.author_username || 'Unknown user' %></strong>
+            <% if (entry.author_label && entry.author_username) { %>
+              <span>(account: <%= entry.author_username %>)</span>
+            <% } %>
+          </div>
           <div class="time"><%= new Date(entry.created_at).toLocaleString() %></div>
-          <% if (userRole === 'admin') { %>
-            <div class="author-note">Posted by: <%= entry.author_username || 'Unknown user' %></div>
-          <% } %>
           <% if (entry.video_filename) { %>
             <p class="detail-hint">Click video controls to play.</p>
           <% } %>

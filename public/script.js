@@ -1,4 +1,5 @@
 const THEME_STORAGE_KEY = 'myfood_theme_v1';
+const SIDEBAR_COLLAPSED_STORAGE_KEY = 'myfood_sidebar_collapsed_v1';
 const THEME_PRESETS = [
   { id: 'sunkeep', name: 'Sunkeep' },
   { id: 'moonharbor', name: 'Moonharbor' },
@@ -141,6 +142,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
   const actionSidebar = document.createElement('aside');
   actionSidebar.className = 'action-sidebar';
+  const sidebarToggleBtn = document.createElement('button');
+  sidebarToggleBtn.type = 'button';
+  sidebarToggleBtn.className = 'sidebar-fold-toggle sidebar-btn';
+  sidebarToggleBtn.setAttribute('aria-controls', 'actionSidebarBody');
+  const sidebarBody = document.createElement('div');
+  sidebarBody.className = 'action-sidebar-body';
+  sidebarBody.id = 'actionSidebarBody';
   const sidebarMain = document.createElement('div');
   sidebarMain.className = 'action-sidebar-main';
   const sidebarInfo = document.createElement('div');
@@ -233,12 +241,44 @@ document.addEventListener('DOMContentLoaded', () => {
 
   themeSwitcher.classList.add('theme-switcher-in-sidebar');
   if (sidebarInfo.childElementCount > 0) {
-    actionSidebar.appendChild(sidebarInfo);
+    sidebarBody.appendChild(sidebarInfo);
   }
-  actionSidebar.appendChild(sidebarMain);
-  actionSidebar.appendChild(themeSwitcher);
+  sidebarBody.appendChild(sidebarMain);
+  sidebarBody.appendChild(themeSwitcher);
+  actionSidebar.appendChild(sidebarToggleBtn);
+  actionSidebar.appendChild(sidebarBody);
   document.body.appendChild(actionSidebar);
   document.body.classList.add('has-action-sidebar');
+
+  function setSidebarCollapsed(isCollapsed, options = {}) {
+    const persist = options.persist !== false;
+    actionSidebar.classList.toggle('is-collapsed', isCollapsed);
+    document.body.classList.toggle('sidebar-collapsed', isCollapsed);
+    sidebarToggleBtn.setAttribute('aria-expanded', String(!isCollapsed));
+    sidebarToggleBtn.textContent = isCollapsed ? 'Open Menu' : 'Hide Menu';
+    if (isCollapsed) setMenuOpen(false);
+    if (persist) {
+      try {
+        window.localStorage.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY, isCollapsed ? '1' : '0');
+      } catch (err) {
+        // Ignore storage failures.
+      }
+    }
+  }
+
+  let sidebarStartsCollapsed = true;
+  try {
+    const savedSidebarState = window.localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY);
+    if (savedSidebarState === '0') sidebarStartsCollapsed = false;
+    if (savedSidebarState === '1') sidebarStartsCollapsed = true;
+  } catch (err) {
+    // Keep default collapsed state.
+  }
+  setSidebarCollapsed(sidebarStartsCollapsed, { persist: false });
+  sidebarToggleBtn.addEventListener('click', () => {
+    const isCollapsed = actionSidebar.classList.contains('is-collapsed');
+    setSidebarCollapsed(!isCollapsed);
+  });
 
   const entries = Array.from(document.querySelectorAll('.entry'));
   if (entries.length) {

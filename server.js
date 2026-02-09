@@ -343,7 +343,8 @@ db.serialize(() => {
     password_hash TEXT,
     role TEXT DEFAULT "normal",
     can_pin INTEGER DEFAULT 0,
-    email_verified_at INTEGER
+    email_verified_at INTEGER,
+    last_login_at INTEGER
   )`);
   db.run(`CREATE TABLE IF NOT EXISTS pending_registrations (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -449,6 +450,13 @@ db.serialize(() => {
       db.run('ALTER TABLE users ADD COLUMN can_pin INTEGER DEFAULT 0', (alterErr) => {
         if (alterErr) return console.error('users can_pin migration error:', alterErr);
         console.log('✓ Added can_pin column to users');
+      });
+    }
+    const hasLastLoginAt = Array.isArray(cols) && cols.some((col) => col.name === 'last_login_at');
+    if (!hasLastLoginAt) {
+      db.run('ALTER TABLE users ADD COLUMN last_login_at INTEGER', (alterErr) => {
+        if (alterErr) return console.error('users last_login_at migration error:', alterErr);
+        console.log('✓ Added last_login_at column to users');
       });
     }
   });
@@ -1884,7 +1892,9 @@ app.post('/comments/:id/delete', ensureAuth, verifyCsrfToken, async (req, res) =
 // Admin: User Management routes
 app.get('/admin/users', ensureAdmin, async (req, res) => {
   try {
-    const users = await dbAllAsync('SELECT id, username, role, can_pin FROM users ORDER BY id ASC');
+    const users = await dbAllAsync(
+      'SELECT id, username, role, can_pin, last_login_at FROM users ORDER BY id ASC'
+    );
     const adminUserError = typeof req.query.error === 'string' ? req.query.error : null;
     const adminUserMessage = typeof req.query.success === 'string' ? req.query.success : null;
     res.render('admin-users', {
@@ -2091,22 +2101,26 @@ app.get('/login', (req, res) => {
   res.render('login', { error: null });
 });
 
-app.post('/login', makeAuthRateLimiter('login'), verifyCsrfToken, (req, res) => {
+app.post('/login', makeAuthRateLimiter('login'), verifyCsrfToken, async (req, res) => {
   const username = (req.body.username || '').trim();
   const password = req.body.password || '';
   if (!username || !password) {
     return res.status(400).render('login', { error: 'Username and password are required' });
   }
 
-  db.get('SELECT * FROM users WHERE username = ?', [username], (err, row) => {
-    if (err) return res.status(500).send('DB error');
+  try {
+    const row = await dbGetAsync('SELECT * FROM users WHERE username = ?', [username]);
     if (!row) return res.render('login', { error: 'Invalid credentials' });
     if (!bcrypt.compareSync(password, row.password_hash)) return res.render('login', { error: 'Invalid credentials' });
+    await dbRunAsync('UPDATE users SET last_login_at = ? WHERE id = ?', [Date.now(), row.id]);
     req.session.userId = row.id;
     req.session.userRole = row.role;
     req.session.userCanPin = Boolean(Number(row.can_pin || 0) === 1);
-    res.redirect('/');
-  });
+    return res.redirect('/');
+  } catch (err) {
+    console.error(err);
+    return res.status(500).send('DB error');
+  }
 });
 
 app.post('/logout', verifyCsrfToken, (req, res) => {

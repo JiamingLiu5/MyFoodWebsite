@@ -42,6 +42,7 @@
                 <th>Username</th>
                 <th>Role</th>
                 <th>Pin Right</th>
+                <th>Last Login</th>
                 <th>Actions</th>
               </tr>
             </thead>
@@ -64,6 +65,13 @@
                     <span class="permission-badge <%= hasPinRight ? 'permission-on' : 'permission-off' %>">
                       <%= hasPinRight ? 'Can Pin' : 'No Pin' %>
                     </span>
+                  </td>
+                  <td>
+                    <% if (user.last_login_at) { %>
+                      <span title="<%= new Date(user.last_login_at).toISOString() %>"><%= new Date(user.last_login_at).toLocaleString() %></span>
+                    <% } else { %>
+                      <span class="info-text">Never</span>
+                    <% } %>
                   </td>
                   <td class="user-actions">
                     <form class="inline-form reset-password-form" action="/admin/users/<%= user.id %>/reset-password" method="post">

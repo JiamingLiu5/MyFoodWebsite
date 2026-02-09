@@ -282,25 +282,6 @@ document.addEventListener('DOMContentLoaded', () => {
     setSidebarCollapsed(!isCollapsed);
   });
 
-  function syncSidebarScrollPosition() {
-    const topOffset = 10;
-    const nextTop = Math.max(topOffset, Math.round(window.scrollY + topOffset));
-    actionSidebar.style.top = `${nextTop}px`;
-  }
-
-  let sidebarScrollRaf = 0;
-  function requestSidebarScrollSync() {
-    if (sidebarScrollRaf) return;
-    sidebarScrollRaf = window.requestAnimationFrame(() => {
-      sidebarScrollRaf = 0;
-      syncSidebarScrollPosition();
-    });
-  }
-
-  syncSidebarScrollPosition();
-  window.addEventListener('scroll', requestSidebarScrollSync, { passive: true });
-  window.addEventListener('resize', requestSidebarScrollSync);
-
   const entries = Array.from(document.querySelectorAll('.entry'));
   if (entries.length) {
     document.body.classList.add('enable-reveal');
@@ -776,11 +757,17 @@ document.addEventListener('DOMContentLoaded', () => {
         setReactionBusy(true);
 
         try {
+          const payload = new URLSearchParams();
+          new FormData(form).forEach((value, key) => {
+            payload.append(key, String(value));
+          });
+
           const response = await fetch(form.action, {
             method: 'POST',
-            body: new FormData(form),
+            body: payload.toString(),
             credentials: 'same-origin',
             headers: {
+              'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
               Accept: 'application/json',
               'X-Requested-With': 'XMLHttpRequest'
             }
@@ -797,14 +784,14 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
           }
 
-          const payload = await response.json();
-          if (!response.ok || !payload || payload.ok !== true) {
-            const message = (payload && payload.error) ? payload.error : `Reaction failed (${response.status}).`;
+          const responsePayload = await response.json();
+          if (!response.ok || !responsePayload || responsePayload.ok !== true) {
+            const message = (responsePayload && responsePayload.error) ? responsePayload.error : `Reaction failed (${response.status}).`;
             window.alert(message);
             return;
           }
 
-          updateReactionButtons(payload.reactions);
+          updateReactionButtons(responsePayload.reactions);
         } catch (err) {
           window.alert('Reaction request failed. Please try again.');
         } finally {

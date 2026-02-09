@@ -247,6 +247,7 @@ a:hover{color:#0f5078}
 
 .upload-form input[type=file],
 .upload-form textarea,
+.upload-form select,
 .auth-form input{
   width:100%;
   border:1px solid var(--field-border);
@@ -256,6 +257,8 @@ a:hover{color:#0f5078}
   color:var(--text);
   font:inherit;
 }
+
+.search-form{margin-bottom:14px}
 
 .upload-form textarea{min-height:96px;resize:vertical}
 
@@ -383,9 +386,21 @@ body.enable-reveal .entry.is-visible{opacity:1;transform:translateY(0) scale(1)}
 .time{font-size:13px;color:var(--muted);margin-top:6px}
 .author-note{font-size:12px;color:var(--muted);margin-top:6px;font-weight:700}
 .pin-badge{display:inline-block;padding:2px 8px;border-radius:999px;background:var(--pin-bg);color:var(--pin-text);font-size:12px;margin-bottom:8px;border:1px solid var(--pin-border)}
+.tags-row{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.tag-chip{
+  display:inline-block;
+  padding:2px 8px;
+  border-radius:999px;
+  background:var(--secondary-soft);
+  color:var(--secondary);
+  border:1px solid color-mix(in srgb, var(--secondary) 26%, white);
+  font-size:12px;
+  font-weight:700;
+}
 
 .entry-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px}
 .entry-actions form{margin:0}
+.section-card{margin-top:12px}
 
 .view-btn,.edit-btn,.pin-btn,.delete-btn{
   display:inline-flex;
@@ -710,6 +725,33 @@ body.enable-reveal .entry.is-visible{opacity:1;transform:translateY(0) scale(1)}
   border-radius:8px;
   margin:16px 0;
   color:var(--text);
+}
+
+.comment-form{margin-top:10px}
+.comments-list{display:grid;gap:10px;margin-top:10px}
+.comment-item{
+  border:1px solid var(--line);
+  border-radius:10px;
+  padding:10px;
+  background:var(--surface-strong);
+}
+.comment-meta{
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  gap:8px;
+  font-size:12px;
+  color:var(--muted);
+}
+.comment-body{
+  margin-top:6px;
+  white-space:pre-wrap;
+  word-break:break-word;
+}
+.audit-meta-cell{
+  max-width:360px;
+  overflow-wrap:anywhere;
+  font-size:12px;
 }
 
 .theme-switcher{

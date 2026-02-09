@@ -51,10 +51,23 @@
         <% } %>
         <label>Note</label>
         <textarea name="note" rows="4" placeholder="Update your note..."><%= entry.note || '' %></textarea>
+        <label>Tags (comma separated)</label>
+        <input name="tags" value="<%= entry.tagText || '' %>" placeholder="spicy, sushi, weekend" />
+        <label>Collection</label>
+        <input list="collectionEditOptions" name="collection" value="<%= entry.collection_name || '' %>" placeholder="e.g. Office Lunches" />
+        <datalist id="collectionEditOptions">
+          <% (userCollections || []).forEach(function(c) { %>
+            <option value="<%= c.name %>"></option>
+          <% }) %>
+        </datalist>
+        <label>
+          <input type="checkbox" name="saveAsDraft" value="1" <%= Number(entry.is_draft || 0) === 1 ? 'checked' : '' %> />
+          Save as draft
+        </label>
         <button type="submit">Save</button>
       </form>
 
-      <p><a href="/">Back</a></p>
+      <p><a href="/entries/<%= entry.id %>">Back</a></p>
     </div>
     <script src="/static/script.js"></script>
   </body>

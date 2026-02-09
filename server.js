@@ -195,7 +195,11 @@ db.serialize(() => {
     originalname TEXT,
     note TEXT,
     is_pinned INTEGER DEFAULT 0,
-    created_at INTEGER
+    created_at INTEGER,
+    is_draft INTEGER DEFAULT 0,
+    deleted_at INTEGER,
+    deleted_by INTEGER,
+    collection_id INTEGER
   )`);
   db.all('PRAGMA table_info(entries)', (pragmaErr, cols) => {
     if (pragmaErr) return console.error('PRAGMA entries error:', pragmaErr);
@@ -220,6 +224,38 @@ db.serialize(() => {
         db.run('CREATE INDEX IF NOT EXISTS idx_entries_user_id ON entries(user_id)');
       });
     }
+    const hasDraft = Array.isArray(cols) && cols.some((col) => col.name === 'is_draft');
+    if (!hasDraft) {
+      db.run('ALTER TABLE entries ADD COLUMN is_draft INTEGER DEFAULT 0', (alterErr) => {
+        if (alterErr) console.error('entries is_draft migration error:', alterErr);
+        else console.log('✓ Added is_draft column to entries');
+      });
+    }
+    const hasDeletedAt = Array.isArray(cols) && cols.some((col) => col.name === 'deleted_at');
+    if (!hasDeletedAt) {
+      db.run('ALTER TABLE entries ADD COLUMN deleted_at INTEGER', (alterErr) => {
+        if (alterErr) console.error('entries deleted_at migration error:', alterErr);
+        else console.log('✓ Added deleted_at column to entries');
+      });
+    }
+    const hasDeletedBy = Array.isArray(cols) && cols.some((col) => col.name === 'deleted_by');
+    if (!hasDeletedBy) {
+      db.run('ALTER TABLE entries ADD COLUMN deleted_by INTEGER', (alterErr) => {
+        if (alterErr) console.error('entries deleted_by migration error:', alterErr);
+        else console.log('✓ Added deleted_by column to entries');
+      });
+    }
+    const hasCollectionId = Array.isArray(cols) && cols.some((col) => col.name === 'collection_id');
+    if (!hasCollectionId) {
+      db.run('ALTER TABLE entries ADD COLUMN collection_id INTEGER', (alterErr) => {
+        if (alterErr) console.error('entries collection_id migration error:', alterErr);
+        else console.log('✓ Added collection_id column to entries');
+      });
+    }
+    db.run('CREATE INDEX IF NOT EXISTS idx_entries_created_at ON entries(created_at)');
+    db.run('CREATE INDEX IF NOT EXISTS idx_entries_deleted_at ON entries(deleted_at)');
+    db.run('CREATE INDEX IF NOT EXISTS idx_entries_collection_id ON entries(collection_id)');
+    db.run('CREATE INDEX IF NOT EXISTS idx_entries_user_id ON entries(user_id)');
   });
   db.run(`CREATE TABLE IF NOT EXISTS entry_images (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -258,6 +294,53 @@ db.serialize(() => {
     created_at INTEGER NOT NULL
   )`);
   db.run('CREATE INDEX IF NOT EXISTS idx_pending_registrations_expires ON pending_registrations(code_expires_at)');
+  db.run(`CREATE TABLE IF NOT EXISTS tags (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE
+  )`);
+  db.run('CREATE UNIQUE INDEX IF NOT EXISTS idx_tags_name_unique ON tags(name)');
+  db.run(`CREATE TABLE IF NOT EXISTS entry_tags (
+    entry_id INTEGER NOT NULL,
+    tag_id INTEGER NOT NULL,
+    PRIMARY KEY(entry_id, tag_id)
+  )`);
+  db.run('CREATE INDEX IF NOT EXISTS idx_entry_tags_entry_id ON entry_tags(entry_id)');
+  db.run('CREATE INDEX IF NOT EXISTS idx_entry_tags_tag_id ON entry_tags(tag_id)');
+  db.run(`CREATE TABLE IF NOT EXISTS collections (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+  )`);
+  db.run('CREATE INDEX IF NOT EXISTS idx_collections_user_id ON collections(user_id)');
+  db.run('CREATE UNIQUE INDEX IF NOT EXISTS idx_collections_user_name_unique ON collections(user_id, name)');
+  db.run(`CREATE TABLE IF NOT EXISTS comments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    entry_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    body TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+  )`);
+  db.run('CREATE INDEX IF NOT EXISTS idx_comments_entry_id ON comments(entry_id)');
+  db.run('CREATE INDEX IF NOT EXISTS idx_comments_user_id ON comments(user_id)');
+  db.run(`CREATE TABLE IF NOT EXISTS entry_reactions (
+    entry_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    reaction TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY(entry_id, user_id)
+  )`);
+  db.run('CREATE INDEX IF NOT EXISTS idx_entry_reactions_entry_id ON entry_reactions(entry_id)');
+  db.run(`CREATE TABLE IF NOT EXISTS audit_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    actor_user_id INTEGER,
+    action TEXT NOT NULL,
+    target_type TEXT,
+    target_id INTEGER,
+    meta_json TEXT,
+    created_at INTEGER NOT NULL
+  )`);
+  db.run('CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs(created_at)');
   // Migration: Add role column to users table
   db.all('PRAGMA table_info(users)', (pragmaErr, cols) => {
     if (pragmaErr) return console.error('PRAGMA users error:', pragmaErr);
@@ -417,9 +500,10 @@ async function sendRegistrationVerificationEmail(email, username, code) {
 }
 
 const ENTRY_SELECT_WITH_AUTHOR = `
-  SELECT e.*, u.username AS author_username
+  SELECT e.*, u.username AS author_username, c.name AS collection_name
   FROM entries e
   LEFT JOIN users u ON u.id = e.user_id
+  LEFT JOIN collections c ON c.id = e.collection_id
 `;
 
 async function getEntryImagesForEntry(entryId, legacyEntry) {
@@ -630,42 +714,317 @@ function getRegistrationConflictMessage(conflicts) {
   return null;
 }
 
+function normalizeTagList(input) {
+  const raw = Array.isArray(input) ? input.join(',') : String(input || '');
+  const seen = new Set();
+  const tags = [];
+  for (const token of raw.split(',')) {
+    const cleaned = token.trim().toLowerCase().replace(/\s+/g, ' ');
+    if (!cleaned) continue;
+    if (cleaned.length > 30) continue;
+    if (seen.has(cleaned)) continue;
+    seen.add(cleaned);
+    tags.push(cleaned);
+    if (tags.length >= 10) break;
+  }
+  return tags;
+}
+
+function normalizeCollectionName(value) {
+  const normalized = String(value || '').trim().replace(/\s+/g, ' ');
+  if (!normalized) return '';
+  return normalized.slice(0, 60);
+}
+
+async function getOrCreateCollectionId(userId, collectionName) {
+  const normalized = normalizeCollectionName(collectionName);
+  if (!normalized || !userId) return null;
+  const existing = await dbGetAsync(
+    'SELECT id FROM collections WHERE user_id = ? AND LOWER(name) = LOWER(?) LIMIT 1',
+    [userId, normalized]
+  );
+  if (existing) return existing.id;
+  const inserted = await dbRunAsync(
+    'INSERT INTO collections(user_id, name, created_at) VALUES (?, ?, ?)',
+    [userId, normalized, Date.now()]
+  );
+  return inserted.lastID;
+}
+
+async function setEntryTags(entryId, tagNames) {
+  const tags = normalizeTagList(tagNames);
+  await dbRunAsync('DELETE FROM entry_tags WHERE entry_id = ?', [entryId]);
+  for (const tagName of tags) {
+    await dbRunAsync('INSERT OR IGNORE INTO tags(name) VALUES (?)', [tagName]);
+    const tagRow = await dbGetAsync('SELECT id FROM tags WHERE name = ?', [tagName]);
+    if (!tagRow) continue;
+    await dbRunAsync('INSERT OR IGNORE INTO entry_tags(entry_id, tag_id) VALUES (?, ?)', [entryId, tagRow.id]);
+  }
+}
+
+async function getEntryTagsMap(entryIds) {
+  const map = {};
+  if (!Array.isArray(entryIds) || entryIds.length === 0) return map;
+  const placeholders = entryIds.map(() => '?').join(',');
+  const rows = await dbAllAsync(
+    `SELECT et.entry_id, t.name
+     FROM entry_tags et
+     JOIN tags t ON t.id = et.tag_id
+     WHERE et.entry_id IN (${placeholders})
+     ORDER BY t.name ASC`,
+    entryIds
+  );
+  for (const row of rows) {
+    if (!map[row.entry_id]) map[row.entry_id] = [];
+    map[row.entry_id].push(row.name);
+  }
+  return map;
+}
+
+async function getEntryTags(entryId) {
+  const rows = await dbAllAsync(
+    `SELECT t.name
+     FROM entry_tags et
+     JOIN tags t ON t.id = et.tag_id
+     WHERE et.entry_id = ?
+     ORDER BY t.name ASC`,
+    [entryId]
+  );
+  return rows.map((row) => row.name);
+}
+
+async function getUserCollections(userId) {
+  if (!userId) return [];
+  return dbAllAsync(
+    'SELECT id, name FROM collections WHERE user_id = ? ORDER BY LOWER(name) ASC',
+    [userId]
+  );
+}
+
+function canViewEntry(row, req) {
+  const isAdmin = req.userRole === 'admin';
+  const isOwner = Number(req.session?.userId || 0) === Number(row.user_id || 0);
+  const isPinnedPublished = Number(row.is_pinned || 0) === 1 && Number(row.is_draft || 0) === 0;
+  const isDeleted = row.deleted_at != null;
+  if (isDeleted) return isAdmin || isOwner;
+  return isAdmin || isOwner || isPinnedPublished;
+}
+
+function canEditEntry(row, req) {
+  const isAdmin = req.userRole === 'admin';
+  const isOwner = Number(req.session?.userId || 0) === Number(row.user_id || 0);
+  return isAdmin || isOwner;
+}
+
+async function getEntryComments(entryId) {
+  return dbAllAsync(
+    `SELECT c.id, c.entry_id, c.user_id, c.body, c.created_at, u.username
+     FROM comments c
+     LEFT JOIN users u ON u.id = c.user_id
+     WHERE c.entry_id = ?
+     ORDER BY c.created_at ASC`,
+    [entryId]
+  );
+}
+
+const SUPPORTED_REACTIONS = ['like', 'love', 'yum'];
+
+async function getEntryReactions(entryId, userId) {
+  const rows = await dbAllAsync(
+    `SELECT reaction, COUNT(*) AS c
+     FROM entry_reactions
+     WHERE entry_id = ?
+     GROUP BY reaction`,
+    [entryId]
+  );
+  const counts = Object.fromEntries(SUPPORTED_REACTIONS.map((reaction) => [reaction, 0]));
+  for (const row of rows) {
+    if (counts[row.reaction] !== undefined) counts[row.reaction] = row.c;
+  }
+  let mine = null;
+  if (userId) {
+    const row = await dbGetAsync(
+      'SELECT reaction FROM entry_reactions WHERE entry_id = ? AND user_id = ?',
+      [entryId, userId]
+    );
+    mine = row ? row.reaction : null;
+  }
+  return { counts, mine };
+}
+
+async function appendAuditLog(req, action, targetType, targetId, meta = null) {
+  try {
+    await dbRunAsync(
+      'INSERT INTO audit_logs(actor_user_id, action, target_type, target_id, meta_json, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+      [
+        req.session?.userId || null,
+        action,
+        targetType || null,
+        Number.isInteger(targetId) ? targetId : null,
+        meta ? JSON.stringify(meta) : null,
+        Date.now()
+      ]
+    );
+  } catch (err) {
+    console.error('audit log insert error:', err);
+  }
+}
+
+function buildFilterQueryString(params = {}) {
+  const q = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value == null) continue;
+    const asString = String(value).trim();
+    if (!asString) continue;
+    q.set(key, asString);
+  }
+  const encoded = q.toString();
+  return encoded ? `?${encoded}` : '';
+}
+
 app.get('/', async (req, res) => {
   try {
     const isAdmin = req.userRole === 'admin';
     const userCanPin = canPinPosts(req);
     const userId = req.session.userId;
-
-    let rows;
-    if (isAdmin) {
-      // Admins see all posts
-      rows = await dbAllAsync(
-        `${ENTRY_SELECT_WITH_AUTHOR}
-         ORDER BY COALESCE(e.is_pinned, 0) DESC, e.created_at DESC`
-      );
-    } else if (userId) {
-      // Normal users see: pinned posts OR their own posts
-      rows = await dbAllAsync(
-        `${ENTRY_SELECT_WITH_AUTHOR}
-         WHERE COALESCE(e.is_pinned, 0) = 1 OR e.user_id = ?
-         ORDER BY COALESCE(e.is_pinned, 0) DESC, e.created_at DESC`,
-        [userId]
-      );
-    } else {
-      // Non-authenticated users see only pinned posts
-      rows = await dbAllAsync(
-        `${ENTRY_SELECT_WITH_AUTHOR}
-         WHERE COALESCE(e.is_pinned, 0) = 1
-         ORDER BY e.created_at DESC`
-      );
+    const filters = {
+      q: String(req.query.q || '').trim(),
+      tag: String(req.query.tag || '').trim().toLowerCase(),
+      collection: String(req.query.collection || '').trim(),
+      author: String(req.query.author || '').trim(),
+      from: String(req.query.from || '').trim(),
+      to: String(req.query.to || '').trim(),
+      visibility: String(req.query.visibility || '').trim(),
+      deleted: String(req.query.deleted || '').trim() === '1' ? '1' : '0'
+    };
+    const canUseAdvancedFilters = Boolean(userId);
+    if (!canUseAdvancedFilters) {
+      filters.visibility = 'published';
+      filters.deleted = '0';
+    } else if (!['all', 'published', 'drafts'].includes(filters.visibility)) {
+      filters.visibility = 'all';
     }
 
-    const countRow = await dbGetAsync('SELECT COUNT(*) AS c FROM users');
+    const where = [];
+    const params = [];
+    const showDeleted = filters.deleted === '1' && canUseAdvancedFilters;
+
+    if (showDeleted) {
+      if (isAdmin) {
+        where.push('e.deleted_at IS NOT NULL');
+      } else {
+        where.push('e.deleted_at IS NOT NULL');
+        where.push('e.user_id = ?');
+        params.push(userId);
+      }
+    } else if (isAdmin) {
+      where.push('e.deleted_at IS NULL');
+    } else if (userId) {
+      where.push('e.deleted_at IS NULL');
+      where.push('((COALESCE(e.is_pinned, 0) = 1 AND COALESCE(e.is_draft, 0) = 0) OR e.user_id = ?)');
+      params.push(userId);
+    } else {
+      where.push('e.deleted_at IS NULL');
+      where.push('COALESCE(e.is_pinned, 0) = 1');
+      where.push('COALESCE(e.is_draft, 0) = 0');
+    }
+
+    if (!showDeleted && canUseAdvancedFilters) {
+      if (filters.visibility === 'published') {
+        where.push('COALESCE(e.is_draft, 0) = 0');
+      } else if (filters.visibility === 'drafts') {
+        where.push('COALESCE(e.is_draft, 0) = 1');
+        if (!isAdmin) {
+          where.push('e.user_id = ?');
+          params.push(userId);
+        }
+      }
+    }
+
+    if (filters.q) {
+      const search = `%${filters.q}%`;
+      where.push(`(
+        COALESCE(e.note, '') LIKE ?
+        OR COALESCE(u.username, '') LIKE ?
+        OR COALESCE(c.name, '') LIKE ?
+        OR EXISTS (
+          SELECT 1
+          FROM entry_tags et
+          JOIN tags t ON t.id = et.tag_id
+          WHERE et.entry_id = e.id AND t.name LIKE ?
+        )
+      )`);
+      params.push(search, search, search, search);
+    }
+
+    if (filters.tag) {
+      where.push(`
+        EXISTS (
+          SELECT 1
+          FROM entry_tags et
+          JOIN tags t ON t.id = et.tag_id
+          WHERE et.entry_id = e.id AND LOWER(t.name) = LOWER(?)
+        )
+      `);
+      params.push(filters.tag);
+    }
+
+    if (filters.collection) {
+      where.push('LOWER(COALESCE(c.name, \'\')) LIKE LOWER(?)');
+      params.push(`%${filters.collection}%`);
+    }
+
+    if (filters.author) {
+      where.push('LOWER(COALESCE(u.username, \'\')) LIKE LOWER(?)');
+      params.push(`%${filters.author}%`);
+    }
+
+    if (filters.from) {
+      const fromDate = new Date(`${filters.from}T00:00:00`);
+      if (!Number.isNaN(fromDate.getTime())) {
+        where.push('e.created_at >= ?');
+        params.push(fromDate.getTime());
+      }
+    }
+    if (filters.to) {
+      const toDate = new Date(`${filters.to}T00:00:00`);
+      if (!Number.isNaN(toDate.getTime())) {
+        const nextDay = new Date(toDate);
+        nextDay.setDate(nextDay.getDate() + 1);
+        where.push('e.created_at < ?');
+        params.push(nextDay.getTime());
+      }
+    }
+
+    const whereSql = where.length > 0 ? `WHERE ${where.join(' AND ')}` : '';
+    const rows = await dbAllAsync(
+      `${ENTRY_SELECT_WITH_AUTHOR}
+       ${whereSql}
+       ORDER BY COALESCE(e.is_pinned, 0) DESC, e.created_at DESC`,
+      params
+    );
+
     const ids = rows.map((row) => row.id);
     const entriesById = Object.fromEntries(rows.map((row) => [row.id, row]));
-    const imagesMap = await getEntryImagesMap(ids, entriesById);
-    const entries = rows.map((row) => ({ ...row, images: imagesMap[row.id] || [] }));
-
+    const [imagesMap, tagsMap] = await Promise.all([
+      getEntryImagesMap(ids, entriesById),
+      getEntryTagsMap(ids)
+    ]);
+    const entries = rows.map((row) => ({
+      ...row,
+      images: imagesMap[row.id] || [],
+      tags: tagsMap[row.id] || []
+    }));
+    const userCollections = await getUserCollections(userId);
+    const filterCollections = isAdmin
+      ? await dbAllAsync(
+        `SELECT DISTINCT c.name
+         FROM collections c
+         JOIN entries e ON e.collection_id = c.id
+         WHERE e.deleted_at IS NULL
+         ORDER BY LOWER(c.name) ASC`
+      )
+      : userCollections.map((item) => ({ name: item.name }));
     const uploadError = req.query.error === 'daily_limit'
       ? `Daily upload limit reached (${DAILY_UPLOAD_LIMIT} posts). Try again tomorrow.`
       : null;
@@ -678,7 +1037,11 @@ app.get('/', async (req, res) => {
       canRegister: true, // Always allow registration now
       uploadError,
       maxImagesPerPost: MAX_IMAGES_PER_POST,
-      showPinnedOnly: !isAdmin
+      showPinnedOnly: !isAdmin,
+      filters,
+      filterCollections,
+      userCollections,
+      currentFilterQuery: buildFilterQueryString(filters)
     });
   } catch (err) {
     console.error(err);
@@ -688,6 +1051,9 @@ app.get('/', async (req, res) => {
 
 app.post('/upload', ensureAuth, upload.array('photos', MAX_IMAGES_PER_POST), verifyCsrfToken, async (req, res) => {
   const note = req.body.note || '';
+  const tagsInput = req.body.tags || '';
+  const collectionName = req.body.collection || '';
+  const saveAsDraft = String(req.body.saveAsDraft || '').trim() === '1' || req.body.saveAsDraft === 'on';
   const files = Array.isArray(req.files) ? req.files : [];
   const storedFiles = [];
 
@@ -705,9 +1071,22 @@ app.post('/upload', ensureAuth, upload.array('photos', MAX_IMAGES_PER_POST), ver
 
     const first = storedFiles[0] || null;
     const createdAt = Date.now();
+    const collectionId = await getOrCreateCollectionId(req.session.userId, collectionName);
+    const isDraft = saveAsDraft ? 1 : 0;
     const insertResult = await dbRunAsync(
-      'INSERT INTO entries(filename, originalname, note, is_pinned, created_at, user_id) VALUES (?,?,?,?,?,?)',
-      [first ? first.key : null, first ? first.originalname : null, note, 0, createdAt, req.session.userId]
+      `INSERT INTO entries(
+        filename, originalname, note, is_pinned, created_at, user_id, is_draft, collection_id
+      ) VALUES (?,?,?,?,?,?,?,?)`,
+      [
+        first ? first.key : null,
+        first ? first.originalname : null,
+        note,
+        0,
+        createdAt,
+        req.session.userId,
+        isDraft,
+        collectionId
+      ]
     );
 
     for (let i = 0; i < storedFiles.length; i += 1) {
@@ -717,6 +1096,11 @@ app.post('/upload', ensureAuth, upload.array('photos', MAX_IMAGES_PER_POST), ver
         [insertResult.lastID, item.key, item.originalname, i]
       );
     }
+    await setEntryTags(insertResult.lastID, tagsInput);
+    await appendAuditLog(req, 'entry.create', 'entry', insertResult.lastID, {
+      imageCount: storedFiles.length,
+      isDraft: isDraft === 1
+    });
 
     res.redirect('/');
   } catch (err) {
@@ -739,22 +1123,24 @@ app.get('/entries/:id', async (req, res) => {
       [entryId]
     );
     if (!row) return res.status(404).send('Entry not found');
-
-    const isAdmin = req.userRole === 'admin';
-    const isPinned = Number(row.is_pinned || 0) === 1;
-    const isOwner = req.session.userId === row.user_id;
-
-    // Can view if: admin, pinned, or owner
-    if (!isAdmin && !isPinned && !isOwner) {
-      return res.redirect('/login');
-    }
-
-    const images = await getEntryImagesForEntry(entryId, row);
+    if (!canViewEntry(row, req)) return res.redirect('/login');
+    const isDeleted = row.deleted_at != null;
+    const canEdit = canEditEntry(row, req);
+    const [images, tags, comments, reactions] = await Promise.all([
+      getEntryImagesForEntry(entryId, row),
+      getEntryTags(entryId),
+      getEntryComments(entryId),
+      getEntryReactions(entryId, req.session.userId)
+    ]);
     res.render('entry', {
-      entry: { ...row, images },
+      entry: { ...row, images, tags, isDeleted },
       userId: req.session.userId,
       userRole: req.userRole,
-      userCanPin: canPinPosts(req)
+      userCanPin: canPinPosts(req),
+      canEdit,
+      reactions,
+      comments,
+      supportedReactions: SUPPORTED_REACTIONS
     });
   } catch (err) {
     console.error(err);
@@ -772,11 +1158,14 @@ app.post('/entries/:id/pin', ensureCanPin, verifyCsrfToken, async (req, res) => 
   const pinned = pinnedRaw === '1' ? 1 : 0;
 
   try {
-    const row = await dbGetAsync('SELECT id FROM entries WHERE id = ?', [entryId]);
+    const row = await dbGetAsync('SELECT id, is_draft, deleted_at FROM entries WHERE id = ?', [entryId]);
     if (!row) return res.status(404).send('Entry not found');
+    if (row.deleted_at != null) return res.status(400).send('Cannot pin a deleted post');
+    if (Number(row.is_draft || 0) === 1) return res.status(400).send('Cannot pin a draft post');
     await dbRunAsync('UPDATE entries SET is_pinned = ? WHERE id = ?', [pinned, entryId]);
+    await appendAuditLog(req, pinned === 1 ? 'entry.pin' : 'entry.unpin', 'entry', entryId, null);
     const returnToRaw = typeof req.body.returnTo === 'string' ? req.body.returnTo.trim() : '';
-    const returnTo = (returnToRaw === '/' || returnToRaw.startsWith('/entries/')) ? returnToRaw : '/';
+    const returnTo = (returnToRaw === '/' || returnToRaw.startsWith('/?') || returnToRaw.startsWith('/entries/')) ? returnToRaw : '/';
     res.redirect(returnTo);
   } catch (err) {
     console.error(err);
@@ -791,10 +1180,26 @@ app.get('/entries/:id/edit', ensureOwnerOrAdmin, async (req, res) => {
   }
 
   try {
-    const row = await dbGetAsync('SELECT * FROM entries WHERE id = ?', [entryId]);
+    const row = await dbGetAsync(
+      `SELECT e.*, c.name AS collection_name
+       FROM entries e
+       LEFT JOIN collections c ON c.id = e.collection_id
+       WHERE e.id = ?`,
+      [entryId]
+    );
     if (!row) return res.status(404).send('Entry not found');
-    const images = await getEntryImagesForEntry(entryId, row);
-    res.render('edit', { entry: { ...row, images }, error: null, maxImagesPerPost: MAX_IMAGES_PER_POST });
+    if (row.deleted_at != null) return res.status(400).send('Cannot edit a deleted post. Restore it first.');
+    const [images, tags, userCollections] = await Promise.all([
+      getEntryImagesForEntry(entryId, row),
+      getEntryTags(entryId),
+      getUserCollections(req.session.userId)
+    ]);
+    res.render('edit', {
+      entry: { ...row, images, tags, tagText: tags.join(', ') },
+      error: null,
+      maxImagesPerPost: MAX_IMAGES_PER_POST,
+      userCollections
+    });
   } catch (err) {
     console.error(err);
     res.status(500).send('DB error');
@@ -808,6 +1213,9 @@ app.post('/entries/:id/edit', ensureOwnerOrAdmin, upload.array('photos', MAX_IMA
   }
 
   const note = req.body.note || '';
+  const tagsInput = req.body.tags || '';
+  const collectionName = req.body.collection || '';
+  const saveAsDraft = String(req.body.saveAsDraft || '').trim() === '1' || req.body.saveAsDraft === 'on';
   const removeAllPhotos = req.body.removeAllPhotos === 'on';
   const removeImageIdsRaw = req.body.removeImageIds;
   const removeImageIds = new Set(
@@ -821,6 +1229,7 @@ app.post('/entries/:id/edit', ensureOwnerOrAdmin, upload.array('photos', MAX_IMA
   try {
     const row = await dbGetAsync('SELECT * FROM entries WHERE id = ?', [entryId]);
     if (!row) return res.status(404).send('Entry not found');
+    if (row.deleted_at != null) return res.status(400).send('Cannot edit a deleted post. Restore it first.');
 
     const existingImages = await getEntryImagesForEntry(entryId, row);
     const imagesToRemove = removeAllPhotos
@@ -829,9 +1238,17 @@ app.post('/entries/:id/edit', ensureOwnerOrAdmin, upload.array('photos', MAX_IMA
     const retainedCount = existingImages.length - imagesToRemove.length;
     if (retainedCount + newFiles.length > MAX_IMAGES_PER_POST) {
       return res.status(400).render('edit', {
-        entry: { ...row, images: existingImages },
+        entry: {
+          ...row,
+          images: existingImages,
+          tags: normalizeTagList(tagsInput),
+          tagText: String(tagsInput || ''),
+          collection_name: normalizeCollectionName(collectionName),
+          is_draft: saveAsDraft ? 1 : 0
+        },
         error: `You can store up to ${MAX_IMAGES_PER_POST} images in one post.`,
-        maxImagesPerPost: MAX_IMAGES_PER_POST
+        maxImagesPerPost: MAX_IMAGES_PER_POST,
+        userCollections: await getUserCollections(req.session.userId)
       });
     }
 
@@ -877,11 +1294,29 @@ app.post('/entries/:id/edit', ensureOwnerOrAdmin, upload.array('photos', MAX_IMA
       'SELECT filename, originalname FROM entry_images WHERE entry_id = ? ORDER BY sort_order, id LIMIT 1',
       [entryId]
     );
+    const collectionId = await getOrCreateCollectionId(req.session.userId, collectionName);
+    const isDraft = saveAsDraft ? 1 : 0;
+    const nextPinned = isDraft === 1 ? 0 : Number(row.is_pinned || 0);
 
     await dbRunAsync(
-      'UPDATE entries SET filename = ?, originalname = ?, note = ? WHERE id = ?',
-      [firstImage ? firstImage.filename : null, firstImage ? firstImage.originalname : null, note, entryId]
+      `UPDATE entries
+       SET filename = ?, originalname = ?, note = ?, is_draft = ?, collection_id = ?, is_pinned = ?
+       WHERE id = ?`,
+      [
+        firstImage ? firstImage.filename : null,
+        firstImage ? firstImage.originalname : null,
+        note,
+        isDraft,
+        collectionId,
+        nextPinned,
+        entryId
+      ]
     );
+    await setEntryTags(entryId, tagsInput);
+    await appendAuditLog(req, 'entry.edit', 'entry', entryId, {
+      imageCount: currentCountRow?.c || 0,
+      isDraft: isDraft === 1
+    });
 
     res.redirect(`/entries/${entryId}`);
   } catch (err) {
@@ -898,27 +1333,119 @@ app.post('/entries/:id/delete', ensureOwnerOrAdmin, verifyCsrfToken, async (req,
   }
 
   try {
-    const row = await dbGetAsync('SELECT * FROM entries WHERE id = ?', [entryId]);
+    const row = await dbGetAsync('SELECT id, deleted_at FROM entries WHERE id = ?', [entryId]);
     if (!row) return res.redirect('/');
-
-    const images = await getEntryImagesForEntry(entryId, row);
-    await dbRunAsync('DELETE FROM entry_images WHERE entry_id = ?', [entryId]);
-    await dbRunAsync('DELETE FROM entries WHERE id = ?', [entryId]);
-
-    for (const image of images) {
-      try {
-        await deleteStoredFile(image.filename);
-      } catch (fileErr) {
-        if (fileErr.code !== 'ENOENT' && fileErr.name !== 'NoSuchKey') {
-          console.error('File delete error:', fileErr);
-        }
-      }
-    }
-
-    res.redirect('/');
+    if (row.deleted_at != null) return res.redirect('/');
+    await dbRunAsync(
+      'UPDATE entries SET deleted_at = ?, deleted_by = ?, is_pinned = 0 WHERE id = ?',
+      [Date.now(), req.session.userId, entryId]
+    );
+    await appendAuditLog(req, 'entry.soft_delete', 'entry', entryId, null);
+    const returnToRaw = typeof req.body.returnTo === 'string' ? req.body.returnTo.trim() : '';
+    const returnTo = (returnToRaw === '/' || returnToRaw.startsWith('/?') || returnToRaw.startsWith('/entries/')) ? returnToRaw : '/';
+    res.redirect(returnTo);
   } catch (err) {
     console.error(err);
     res.status(500).send('Delete error');
+  }
+});
+
+app.post('/entries/:id/restore', ensureOwnerOrAdmin, verifyCsrfToken, async (req, res) => {
+  const entryId = Number.parseInt(req.params.id, 10);
+  if (!Number.isInteger(entryId) || entryId <= 0) {
+    return res.status(400).send('Invalid entry id');
+  }
+
+  try {
+    const row = await dbGetAsync('SELECT id, deleted_at FROM entries WHERE id = ?', [entryId]);
+    if (!row) return res.redirect('/');
+    if (row.deleted_at == null) return res.redirect(`/entries/${entryId}`);
+    await dbRunAsync('UPDATE entries SET deleted_at = NULL, deleted_by = NULL WHERE id = ?', [entryId]);
+    await appendAuditLog(req, 'entry.restore', 'entry', entryId, null);
+    const returnToRaw = typeof req.body.returnTo === 'string' ? req.body.returnTo.trim() : '';
+    const returnTo = (returnToRaw === '/' || returnToRaw.startsWith('/?') || returnToRaw.startsWith('/entries/')) ? returnToRaw : `/entries/${entryId}`;
+    res.redirect(returnTo);
+  } catch (err) {
+    console.error(err);
+    res.status(500).send('Restore error');
+  }
+});
+
+app.post('/entries/:id/comments', ensureAuth, verifyCsrfToken, async (req, res) => {
+  const entryId = Number.parseInt(req.params.id, 10);
+  if (!Number.isInteger(entryId) || entryId <= 0) return res.status(400).send('Invalid entry id');
+  const body = String(req.body.body || '').trim();
+  if (!body) return res.redirect(`/entries/${entryId}`);
+  if (body.length > 500) return res.status(400).send('Comment is too long (max 500 characters).');
+
+  try {
+    const row = await dbGetAsync('SELECT id, user_id, is_pinned, is_draft, deleted_at FROM entries WHERE id = ?', [entryId]);
+    if (!row) return res.status(404).send('Entry not found');
+    if (!canViewEntry(row, req) || row.deleted_at != null) return res.status(403).send('Not allowed');
+    await dbRunAsync(
+      'INSERT INTO comments(entry_id, user_id, body, created_at) VALUES (?, ?, ?, ?)',
+      [entryId, req.session.userId, body, Date.now()]
+    );
+    await appendAuditLog(req, 'comment.create', 'entry', entryId, null);
+    res.redirect(`/entries/${entryId}`);
+  } catch (err) {
+    console.error(err);
+    res.status(500).send('Comment error');
+  }
+});
+
+app.post('/entries/:id/reactions', ensureAuth, verifyCsrfToken, async (req, res) => {
+  const entryId = Number.parseInt(req.params.id, 10);
+  if (!Number.isInteger(entryId) || entryId <= 0) return res.status(400).send('Invalid entry id');
+  const reaction = String(req.body.reaction || '').trim().toLowerCase();
+  if (!SUPPORTED_REACTIONS.includes(reaction)) return res.status(400).send('Unsupported reaction');
+
+  try {
+    const row = await dbGetAsync('SELECT id, user_id, is_pinned, is_draft, deleted_at FROM entries WHERE id = ?', [entryId]);
+    if (!row) return res.status(404).send('Entry not found');
+    if (!canViewEntry(row, req) || row.deleted_at != null) return res.status(403).send('Not allowed');
+
+    const existing = await dbGetAsync(
+      'SELECT reaction FROM entry_reactions WHERE entry_id = ? AND user_id = ?',
+      [entryId, req.session.userId]
+    );
+    if (existing && existing.reaction === reaction) {
+      await dbRunAsync('DELETE FROM entry_reactions WHERE entry_id = ? AND user_id = ?', [entryId, req.session.userId]);
+      await appendAuditLog(req, 'reaction.remove', 'entry', entryId, { reaction });
+    } else {
+      await dbRunAsync(
+        `INSERT INTO entry_reactions(entry_id, user_id, reaction, created_at)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(entry_id, user_id) DO UPDATE SET
+           reaction = excluded.reaction,
+           created_at = excluded.created_at`,
+        [entryId, req.session.userId, reaction, Date.now()]
+      );
+      await appendAuditLog(req, 'reaction.set', 'entry', entryId, { reaction });
+    }
+    res.redirect(`/entries/${entryId}`);
+  } catch (err) {
+    console.error(err);
+    res.status(500).send('Reaction error');
+  }
+});
+
+app.post('/comments/:id/delete', ensureAuth, verifyCsrfToken, async (req, res) => {
+  const commentId = Number.parseInt(req.params.id, 10);
+  if (!Number.isInteger(commentId) || commentId <= 0) return res.status(400).send('Invalid comment id');
+
+  try {
+    const comment = await dbGetAsync('SELECT id, entry_id, user_id FROM comments WHERE id = ?', [commentId]);
+    if (!comment) return res.status(404).send('Comment not found');
+    const isAdmin = req.userRole === 'admin';
+    const isOwner = Number(req.session.userId) === Number(comment.user_id);
+    if (!isAdmin && !isOwner) return res.status(403).send('Not allowed');
+    await dbRunAsync('DELETE FROM comments WHERE id = ?', [commentId]);
+    await appendAuditLog(req, 'comment.delete', 'comment', commentId, { entryId: comment.entry_id });
+    res.redirect(`/entries/${comment.entry_id}`);
+  } catch (err) {
+    console.error(err);
+    res.status(500).send('Delete comment error');
   }
 });
 
@@ -938,6 +1465,38 @@ app.get('/admin/users', ensureAdmin, async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).send('Error loading users');
+  }
+});
+
+app.get('/admin/audit', ensureAdmin, async (req, res) => {
+  try {
+    const logs = await dbAllAsync(
+      `SELECT a.id, a.action, a.target_type, a.target_id, a.meta_json, a.created_at,
+              a.actor_user_id, u.username AS actor_username
+       FROM audit_logs a
+       LEFT JOIN users u ON u.id = a.actor_user_id
+       ORDER BY a.created_at DESC
+       LIMIT 200`
+    );
+    const parsedLogs = logs.map((log) => {
+      let meta = null;
+      if (log.meta_json) {
+        try {
+          meta = JSON.parse(log.meta_json);
+        } catch (err) {
+          meta = { raw: log.meta_json };
+        }
+      }
+      return { ...log, meta };
+    });
+    res.render('admin-audit', {
+      logs: parsedLogs,
+      userId: req.session.userId,
+      userRole: req.userRole
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).send('Error loading audit logs');
   }
 });
 
@@ -963,6 +1522,7 @@ app.post('/admin/users/:id/role', ensureAdmin, verifyCsrfToken, async (req, res)
     }
 
     await dbRunAsync('UPDATE users SET role = ? WHERE id = ?', [newRole, targetUserId]);
+    await appendAuditLog(req, 'user.role_change', 'user', targetUserId, { role: newRole });
 
     // If updating current user's role, update session
     if (targetUserId === req.session.userId) {
@@ -991,6 +1551,7 @@ app.post('/admin/users/:id/pin-permission', ensureAdmin, verifyCsrfToken, async 
     // Admin users always have pin capability via role; this toggle is for non-admin users.
     if (targetUser.role !== 'admin') {
       await dbRunAsync('UPDATE users SET can_pin = ? WHERE id = ?', [canPin, targetUserId]);
+      await appendAuditLog(req, 'user.pin_permission', 'user', targetUserId, { canPin: canPin === 1 });
     }
 
     if (targetUserId === req.session.userId) {
@@ -1022,6 +1583,7 @@ app.post('/admin/users/:id/reset-password', ensureAdmin, verifyCsrfToken, async 
 
     const newHash = bcrypt.hashSync(newPassword, 10);
     await dbRunAsync('UPDATE users SET password_hash = ? WHERE id = ?', [newHash, targetUserId]);
+    await appendAuditLog(req, 'user.password_reset', 'user', targetUserId, null);
 
     return res.redirect(`/admin/users?success=Password%20reset%20for%20user%20%23${targetUserId}.`);
   } catch (err) {
@@ -1061,12 +1623,19 @@ app.post('/admin/users/:id/delete', ensureAdmin, verifyCsrfToken, async (req, re
       for (const img of images) {
         await deleteStoredFile(img.filename);
       }
+      await dbRunAsync('DELETE FROM comments WHERE entry_id = ?', [entry.id]);
+      await dbRunAsync('DELETE FROM entry_reactions WHERE entry_id = ?', [entry.id]);
+      await dbRunAsync('DELETE FROM entry_tags WHERE entry_id = ?', [entry.id]);
       await dbRunAsync('DELETE FROM entry_images WHERE entry_id = ?', [entry.id]);
     }
     await dbRunAsync('DELETE FROM entries WHERE user_id = ?', [targetUserId]);
+    await dbRunAsync('DELETE FROM comments WHERE user_id = ?', [targetUserId]);
+    await dbRunAsync('DELETE FROM entry_reactions WHERE user_id = ?', [targetUserId]);
+    await dbRunAsync('DELETE FROM collections WHERE user_id = ?', [targetUserId]);
 
     // Delete user
     await dbRunAsync('DELETE FROM users WHERE id = ?', [targetUserId]);
+    await appendAuditLog(req, 'user.delete', 'user', targetUserId, null);
 
     res.redirect('/admin/users');
   } catch (err) {

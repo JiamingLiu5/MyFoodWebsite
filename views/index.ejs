@@ -23,6 +23,7 @@
             </span>
             <% if (userRole === 'admin') { %>
               <a href="/admin/users">Manage Users</a>
+              <a href="/admin/audit">Audit Log</a>
             <% } %>
             <form class="top-nav-form" action="/logout" method="post">
               <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
@@ -37,40 +38,96 @@
 
       <% if (userId) { %>
       <% if (userRole === 'admin') { %>
-        <p class="status-note"><em>Admin view: Showing all posts</em></p>
+        <p class="status-note"><em>Admin view: showing all posts, drafts, and trash when filtered.</em></p>
       <% } else if (userCanPin) { %>
         <p class="status-note"><em>Pin manager: You can pin/unpin posts you can view.</em></p>
       <% } else { %>
-        <p class="status-note"><em>Normal user: You can create posts and view pinned content</em></p>
-      <% } %>
-      <form action="/upload" method="post" enctype="multipart/form-data" class="upload-form">
-        <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
-        <label>Photos (optional, up to <%= maxImagesPerPost %>)</label>
-        <input type="file" name="photos" accept="image/*" multiple />
-        <div class="upload-preview" id="uploadPreview" hidden>
-          <img id="uploadPreviewImg" alt="Selected photo preview" />
-          <div class="upload-preview-meta">
-            <div id="uploadPreviewName"></div>
-            <div id="uploadPreviewInfo"></div>
-          </div>
-        </div>
-        <p id="uploadPreviewError" class="upload-preview-error" hidden></p>
-        <label>Note</label>
-        <textarea name="note" rows="3" placeholder="Write something about this photo..."></textarea>
-        <button type="submit">Upload</button>
-      </form>
-      <% if (uploadError) { %>
-        <p class="upload-error"><%= uploadError %></p>
+        <p class="status-note"><em>Normal user: You can create posts, drafts, and view pinned content.</em></p>
       <% } %>
       <% } else { %>
-        <p class="status-note"><em>Viewing pinned posts only. <a href="/login">Login</a> or <a href="/register">register</a> to create posts.</em></p>
+        <p class="status-note"><em>Viewing pinned published posts only. <a href="/login">Login</a> or <a href="/register">register</a> to create posts.</em></p>
+      <% } %>
+
+      <form action="/" method="get" class="upload-form search-form">
+        <label>Search</label>
+        <input type="text" name="q" value="<%= filters.q %>" placeholder="notes, username, collection, tags..." />
+        <label>Tag</label>
+        <input type="text" name="tag" value="<%= filters.tag %>" placeholder="e.g. ramen" />
+        <label>Collection</label>
+        <input list="collectionFilterOptions" name="collection" value="<%= filters.collection %>" placeholder="e.g. date night" />
+        <datalist id="collectionFilterOptions">
+          <% filterCollections.forEach(function(c) { %>
+            <option value="<%= c.name %>"></option>
+          <% }) %>
+        </datalist>
+        <label>Author</label>
+        <input type="text" name="author" value="<%= filters.author %>" placeholder="username" />
+        <label>From</label>
+        <input type="date" name="from" value="<%= filters.from %>" />
+        <label>To</label>
+        <input type="date" name="to" value="<%= filters.to %>" />
+        <% if (userId) { %>
+          <label>Visibility</label>
+          <select name="visibility">
+            <option value="all" <%= filters.visibility === 'all' ? 'selected' : '' %>>All</option>
+            <option value="published" <%= filters.visibility === 'published' ? 'selected' : '' %>>Published only</option>
+            <option value="drafts" <%= filters.visibility === 'drafts' ? 'selected' : '' %>>Drafts only</option>
+          </select>
+          <label>Status</label>
+          <select name="deleted">
+            <option value="0" <%= filters.deleted !== '1' ? 'selected' : '' %>>Active</option>
+            <option value="1" <%= filters.deleted === '1' ? 'selected' : '' %>>Trash</option>
+          </select>
+        <% } %>
+        <div class="entry-actions">
+          <button type="submit">Apply Filters</button>
+          <a class="view-btn" href="/">Clear</a>
+        </div>
+      </form>
+
+      <% if (userId) { %>
+        <form action="/upload" method="post" enctype="multipart/form-data" class="upload-form">
+          <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
+          <label>Photos (optional, up to <%= maxImagesPerPost %>)</label>
+          <input type="file" name="photos" accept="image/*" multiple />
+          <div class="upload-preview" id="uploadPreview" hidden>
+            <img id="uploadPreviewImg" alt="Selected photo preview" />
+            <div class="upload-preview-meta">
+              <div id="uploadPreviewName"></div>
+              <div id="uploadPreviewInfo"></div>
+            </div>
+          </div>
+          <p id="uploadPreviewError" class="upload-preview-error" hidden></p>
+          <label>Note</label>
+          <textarea name="note" rows="3" placeholder="Write something about this photo..."></textarea>
+          <label>Tags (comma separated)</label>
+          <input name="tags" placeholder="spicy, sushi, weekend" />
+          <label>Collection</label>
+          <input list="collectionCreateOptions" name="collection" placeholder="e.g. Office Lunches" />
+          <datalist id="collectionCreateOptions">
+            <% userCollections.forEach(function(c) { %>
+              <option value="<%= c.name %>"></option>
+            <% }) %>
+          </datalist>
+          <label>
+            <input type="checkbox" name="saveAsDraft" value="1" />
+            Save as draft (visible only to you and admins)
+          </label>
+          <button type="submit">Save Post</button>
+        </form>
+      <% } %>
+
+      <% if (uploadError) { %>
+        <p class="upload-error"><%= uploadError %></p>
       <% } %>
 
       <section class="entries">
         <% if (entries.length === 0) { %>
-          <p>No entries yet.</p>
+          <p>No posts found for this filter.</p>
         <% } else { %>
           <% entries.forEach(function(e) { %>
+            <% const isDeleted = e.deleted_at != null; %>
+            <% const isDraft = Number(e.is_draft || 0) === 1; %>
             <article class="entry">
               <% if (e.images && e.images.length) { %>
                 <% const previewImages = e.images.slice(0, 4); %>
@@ -86,10 +143,24 @@
                 </a>
               <% } %>
               <div class="meta">
-                <% if (e.is_pinned) { %>
+                <% if (isDeleted) { %>
+                  <div class="pin-badge">Deleted</div>
+                <% } else if (isDraft) { %>
+                  <div class="pin-badge">Draft</div>
+                <% } else if (e.is_pinned) { %>
                   <div class="pin-badge">Pinned</div>
                 <% } %>
+                <% if (e.collection_name) { %>
+                  <div class="author-note">Collection: <strong><%= e.collection_name %></strong></div>
+                <% } %>
                 <div class="note"><%= e.note ? e.note : '(no note)' %></div>
+                <% if (e.tags && e.tags.length > 0) { %>
+                  <div class="tags-row">
+                    <% e.tags.forEach(function(tag) { %>
+                      <span class="tag-chip">#<%= tag %></span>
+                    <% }) %>
+                  </div>
+                <% } %>
                 <div class="time"><%= new Date(e.created_at).toLocaleString() %></div>
                 <% if (userRole === 'admin') { %>
                   <div class="author-note">Posted by: <%= e.author_username || 'Unknown user' %></div>
@@ -97,34 +168,52 @@
                 <div class="entry-actions">
                   <a class="view-btn" href="/entries/<%= e.id %>">View</a>
                   <% if (userRole === 'admin') { %>
-                    <!-- Admin can do everything -->
-                    <a class="edit-btn" href="/entries/<%= e.id %>/edit">Edit</a>
-                    <form class="pin-form" action="/entries/<%= e.id %>/pin" method="post">
-                      <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
-                      <input type="hidden" name="pinned" value="<%= e.is_pinned ? 0 : 1 %>" />
-                      <input type="hidden" name="returnTo" value="/" />
-                      <button class="pin-btn" type="submit"><%= e.is_pinned ? 'Unpin' : 'Pin' %></button>
-                    </form>
-                    <form class="delete-form" action="/entries/<%= e.id %>/delete" method="post" onsubmit="return confirm('Delete this post?')">
-                      <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
-                      <button class="delete-btn" type="submit">Delete</button>
-                    </form>
+                    <% if (isDeleted) { %>
+                      <form class="inline-form" action="/entries/<%= e.id %>/restore" method="post">
+                        <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
+                        <input type="hidden" name="returnTo" value="/<%= currentFilterQuery %>" />
+                        <button class="edit-btn" type="submit">Restore</button>
+                      </form>
+                    <% } else { %>
+                      <a class="edit-btn" href="/entries/<%= e.id %>/edit">Edit</a>
+                      <% if (!isDraft) { %>
+                        <form class="pin-form" action="/entries/<%= e.id %>/pin" method="post">
+                          <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
+                          <input type="hidden" name="pinned" value="<%= e.is_pinned ? 0 : 1 %>" />
+                          <input type="hidden" name="returnTo" value="/<%= currentFilterQuery %>" />
+                          <button class="pin-btn" type="submit"><%= e.is_pinned ? 'Unpin' : 'Pin' %></button>
+                        </form>
+                      <% } %>
+                      <form class="delete-form" action="/entries/<%= e.id %>/delete" method="post" onsubmit="return confirm('Move this post to trash?')">
+                        <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
+                        <input type="hidden" name="returnTo" value="/<%= currentFilterQuery %>" />
+                        <button class="delete-btn" type="submit">Trash</button>
+                      </form>
+                    <% } %>
                   <% } else { %>
-                    <% if (userCanPin) { %>
+                    <% if (userCanPin && !isDeleted && !isDraft) { %>
                       <form class="pin-form" action="/entries/<%= e.id %>/pin" method="post">
                         <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
                         <input type="hidden" name="pinned" value="<%= e.is_pinned ? 0 : 1 %>" />
-                        <input type="hidden" name="returnTo" value="/" />
+                        <input type="hidden" name="returnTo" value="/<%= currentFilterQuery %>" />
                         <button class="pin-btn" type="submit"><%= e.is_pinned ? 'Unpin' : 'Pin' %></button>
                       </form>
                     <% } %>
                     <% if (userId && e.user_id === userId) { %>
-                      <!-- Normal users can only edit/delete their own posts -->
-                      <a class="edit-btn" href="/entries/<%= e.id %>/edit">Edit</a>
-                      <form class="delete-form" action="/entries/<%= e.id %>/delete" method="post" onsubmit="return confirm('Delete this post?')">
-                        <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
-                        <button class="delete-btn" type="submit">Delete</button>
-                      </form>
+                      <% if (isDeleted) { %>
+                        <form class="inline-form" action="/entries/<%= e.id %>/restore" method="post">
+                          <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
+                          <input type="hidden" name="returnTo" value="/<%= currentFilterQuery %>" />
+                          <button class="edit-btn" type="submit">Restore</button>
+                        </form>
+                      <% } else { %>
+                        <a class="edit-btn" href="/entries/<%= e.id %>/edit">Edit</a>
+                        <form class="delete-form" action="/entries/<%= e.id %>/delete" method="post" onsubmit="return confirm('Move this post to trash?')">
+                          <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
+                          <input type="hidden" name="returnTo" value="/<%= currentFilterQuery %>" />
+                          <button class="delete-btn" type="submit">Trash</button>
+                        </form>
+                      <% } %>
                     <% } %>
                   <% } %>
                 </div>

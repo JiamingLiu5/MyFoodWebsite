@@ -27,32 +27,39 @@
         <% } %>
 
         <div class="meta">
-          <% if (entry.is_pinned) { %>
+          <% if (entry.isDeleted) { %>
+            <div class="pin-badge">Deleted</div>
+          <% } else if (Number(entry.is_draft || 0) === 1) { %>
+            <div class="pin-badge">Draft</div>
+          <% } else if (entry.is_pinned) { %>
             <div class="pin-badge">Pinned</div>
           <% } %>
+          <% if (entry.collection_name) { %>
+            <div class="author-note">Collection: <strong><%= entry.collection_name %></strong></div>
+          <% } %>
           <div class="note"><%= entry.note ? entry.note : '(no note)' %></div>
+          <% if (entry.tags && entry.tags.length > 0) { %>
+            <div class="tags-row">
+              <% entry.tags.forEach(function(tag) { %>
+                <span class="tag-chip">#<%= tag %></span>
+              <% }) %>
+            </div>
+          <% } %>
           <div class="time"><%= new Date(entry.created_at).toLocaleString() %></div>
           <% if (userRole === 'admin') { %>
             <div class="author-note">Posted by: <%= entry.author_username || 'Unknown user' %></div>
           <% } %>
           <p class="detail-hint">Click image to view full size.</p>
-          <% if (userRole === 'admin') { %>
-            <div class="entry-actions">
-              <form class="pin-form" action="/entries/<%= entry.id %>/pin" method="post">
+
+          <div class="entry-actions">
+            <% if (entry.isDeleted && canEdit) { %>
+              <form class="inline-form" action="/entries/<%= entry.id %>/restore" method="post">
                 <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
-                <input type="hidden" name="pinned" value="<%= entry.is_pinned ? 0 : 1 %>" />
                 <input type="hidden" name="returnTo" value="/entries/<%= entry.id %>" />
-                <button class="pin-btn" type="submit"><%= entry.is_pinned ? 'Unpin' : 'Pin' %></button>
+                <button class="edit-btn" type="submit">Restore</button>
               </form>
-              <a class="edit-btn" href="/entries/<%= entry.id %>/edit">Edit</a>
-              <form class="delete-form" action="/entries/<%= entry.id %>/delete" method="post" onsubmit="return confirm('Delete this post?')">
-                <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
-                <button class="delete-btn" type="submit">Delete</button>
-              </form>
-            </div>
-          <% } else { %>
-            <div class="entry-actions">
-              <% if (userCanPin) { %>
+            <% } else if (!entry.isDeleted) { %>
+              <% if (userCanPin && Number(entry.is_draft || 0) === 0) { %>
                 <form class="pin-form" action="/entries/<%= entry.id %>/pin" method="post">
                   <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
                   <input type="hidden" name="pinned" value="<%= entry.is_pinned ? 0 : 1 %>" />
@@ -60,17 +67,71 @@
                   <button class="pin-btn" type="submit"><%= entry.is_pinned ? 'Unpin' : 'Pin' %></button>
                 </form>
               <% } %>
-              <% if (userId && entry.user_id === userId) { %>
+              <% if (canEdit) { %>
                 <a class="edit-btn" href="/entries/<%= entry.id %>/edit">Edit</a>
-                <form class="delete-form" action="/entries/<%= entry.id %>/delete" method="post" onsubmit="return confirm('Delete this post?')">
+                <form class="delete-form" action="/entries/<%= entry.id %>/delete" method="post" onsubmit="return confirm('Move this post to trash?')">
                   <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
-                  <button class="delete-btn" type="submit">Delete</button>
+                  <input type="hidden" name="returnTo" value="/entries/<%= entry.id %>" />
+                  <button class="delete-btn" type="submit">Trash</button>
                 </form>
               <% } %>
-            </div>
-          <% } %>
+            <% } %>
+          </div>
         </div>
       </article>
+
+      <% if (!entry.isDeleted) { %>
+        <section class="entry section-card">
+          <h3 class="brand-subtitle">Reactions</h3>
+          <div class="entry-actions">
+            <% supportedReactions.forEach(function(reaction) { %>
+              <form class="inline-form" action="/entries/<%= entry.id %>/reactions" method="post">
+                <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
+                <input type="hidden" name="reaction" value="<%= reaction %>" />
+                <button class="<%= reactions.mine === reaction ? 'pin-btn' : 'view-btn' %>" type="submit">
+                  <%= reaction %> (<%= reactions.counts[reaction] || 0 %>)
+                </button>
+              </form>
+            <% }) %>
+          </div>
+        </section>
+
+        <section class="entry section-card">
+          <h3 class="brand-subtitle">Comments (<%= comments.length %>)</h3>
+          <% if (userId) { %>
+            <form class="upload-form comment-form" action="/entries/<%= entry.id %>/comments" method="post">
+              <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
+              <label>Add comment</label>
+              <textarea name="body" rows="3" maxlength="500" required placeholder="Share your thoughts..."></textarea>
+              <button type="submit">Post Comment</button>
+            </form>
+          <% } else { %>
+            <p class="status-note"><a href="/login">Login</a> to comment and react.</p>
+          <% } %>
+
+          <% if (comments.length === 0) { %>
+            <p class="pinned-only-note">No comments yet.</p>
+          <% } else { %>
+            <div class="comments-list">
+              <% comments.forEach(function(comment) { %>
+                <article class="comment-item">
+                  <div class="comment-meta">
+                    <strong><%= comment.username || 'Unknown user' %></strong>
+                    <span><%= new Date(comment.created_at).toLocaleString() %></span>
+                  </div>
+                  <div class="comment-body"><%= comment.body %></div>
+                  <% if (userId && (comment.user_id === userId || userRole === 'admin')) { %>
+                    <form class="inline-form" action="/comments/<%= comment.id %>/delete" method="post" onsubmit="return confirm('Delete this comment?')">
+                      <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
+                      <button class="delete-btn" type="submit">Delete Comment</button>
+                    </form>
+                  <% } %>
+                </article>
+              <% }) %>
+            </div>
+          <% } %>
+        </section>
+      <% } %>
     </div>
     <script src="/static/script.js"></script>
   </body>

@@ -6,6 +6,9 @@ Post features:
 
 - Multiple images per post (default max 10 per post).
 - One optional video per post.
+- Video poster preview from first frame generated on the client side.
+- Client-side image optimization before upload (resize/compress) to reduce server and bandwidth load.
+- Optional server-side ffmpeg processing for poster generation and `.mov` to `.mp4` transcoding.
 - Single-post detail page with full-size image viewer on click.
 - Edit and delete existing posts.
 - Pin/unpin posts (pinned posts stay at top for logged-in users).
@@ -33,6 +36,14 @@ Run locally:
 ```bash
 npm install
 ```
+
+Optional for server-side video processing support:
+
+```bash
+brew install ffmpeg
+```
+
+Then set `ENABLE_SERVER_VIDEO_PROCESSING=true` (and optionally `ENABLE_VIDEO_TRANSCODE=true`) in your env.
 
 2. Start the server
 
@@ -106,6 +117,9 @@ Environment variables:
 - `MAX_IMAGES_PER_POST` — max images allowed in one post (default `10`)
 - `MAX_UPLOAD_FILE_SIZE_MB` — max size per uploaded image in MB (default `10`)
 - `MAX_VIDEO_FILE_SIZE_MB` — max size for uploaded video in MB (default `50`)
+- `ENABLE_SERVER_VIDEO_PROCESSING` — set `true` to enable ffmpeg-based server processing for posters/transcoding (default `false`)
+- `ENABLE_VIDEO_TRANSCODE` — when server processing is enabled, set `true` to auto-transcode `.mov` to `.mp4` (default `false`)
+- `FFMPEG_PATH` — ffmpeg binary path (default `ffmpeg`)
 - `BODY_LIMIT` — max URL-encoded body size (default `256kb`)
 - `AUTH_RATE_LIMIT_WINDOW_MINUTES` — auth brute-force window size (default `15`)
 - `AUTH_RATE_LIMIT_MAX_ATTEMPTS` — max auth attempts per IP per window (default `25`)
@@ -127,6 +141,9 @@ export SMTP_PASS="smtp-pass"
 export SMTP_FROM="no-reply@ldnmeals.com"
 export MAX_UPLOAD_FILE_SIZE_MB="10"
 export MAX_VIDEO_FILE_SIZE_MB="50"
+export ENABLE_SERVER_VIDEO_PROCESSING="false"
+export ENABLE_VIDEO_TRANSCODE="false"
+export FFMPEG_PATH="ffmpeg"
 export AUTH_RATE_LIMIT_WINDOW_MINUTES="15"
 export AUTH_RATE_LIMIT_MAX_ATTEMPTS="25"
 npm start

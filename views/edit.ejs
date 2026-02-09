@@ -23,7 +23,7 @@
             <% entry.images.forEach(function(img) { %>
               <div class="editable-image">
                 <a class="entry-image-link" href="<%= fileUrl(img.filename) %>" data-lightbox>
-                  <img src="<%= fileUrl(img.filename) %>" alt="Current photo" />
+                  <img src="<%= fileUrl(img.filename) %>" alt="Current photo" loading="lazy" decoding="async" />
                 </a>
                 <label class="remove-image-label">
                   <input type="checkbox" name="removeImageIds" value="<%= img.id %>" form="editPostForm" />
@@ -37,7 +37,7 @@
       <% if (entry.video_filename) { %>
         <article class="entry">
           <div class="entry-video-wrap">
-            <video class="entry-video" controls preload="metadata">
+            <video class="entry-video" controls preload="metadata" <% if (entry.video_poster_filename) { %>poster="<%= fileUrl(entry.video_poster_filename) %>"<% } %>>
               <source src="<%= fileUrl(entry.video_filename) %>" <% if (entry.video_mimetype) { %>type="<%= entry.video_mimetype %>"<% } %> />
               Your browser does not support the video tag.
             </video>
@@ -52,9 +52,20 @@
       <form id="editPostForm" action="/entries/<%= entry.id %>/edit" method="post" enctype="multipart/form-data" class="upload-form">
         <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
         <label>Add photos (optional, up to <%= maxImagesPerPost %> total)</label>
-        <input type="file" name="photos" accept="image/*" multiple />
+        <input
+          type="file"
+          name="photos"
+          accept="image/*"
+          multiple
+          data-max-count="<%= maxImagesPerPost %>"
+        />
         <label>Add/replace video (optional, 1 file)</label>
-        <input type="file" name="video" accept="video/*" />
+        <input
+          type="file"
+          name="video"
+          accept="video/*"
+          data-max-size-mb="<%= maxVideoFileSizeMb %>"
+        />
         <div class="upload-preview" id="uploadPreview" hidden>
           <img id="uploadPreviewImg" alt="Selected photo preview" />
           <div class="upload-preview-meta">

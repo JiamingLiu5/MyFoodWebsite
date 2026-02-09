@@ -255,7 +255,9 @@ document.addEventListener('DOMContentLoaded', () => {
     actionSidebar.classList.toggle('is-collapsed', isCollapsed);
     document.body.classList.toggle('sidebar-collapsed', isCollapsed);
     sidebarToggleBtn.setAttribute('aria-expanded', String(!isCollapsed));
-    sidebarToggleBtn.textContent = isCollapsed ? 'Open Menu' : 'Hide Menu';
+    sidebarToggleBtn.textContent = isCollapsed ? '≡' : '×';
+    sidebarToggleBtn.setAttribute('aria-label', isCollapsed ? 'Open menu' : 'Close menu');
+    sidebarToggleBtn.setAttribute('title', isCollapsed ? 'Open menu' : 'Close menu');
     if (isCollapsed) setMenuOpen(false);
     if (persist) {
       try {
@@ -305,6 +307,74 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
+  function tryBuildClientVideoPoster(video) {
+    if (!video || video.getAttribute('poster')) return;
+
+    let didSetPoster = false;
+    const finalize = () => {
+      if (didSetPoster) return;
+      didSetPoster = true;
+      video.classList.add('is-media-loaded');
+    };
+
+    function drawPoster() {
+      try {
+        const width = Number(video.videoWidth || 0);
+        const height = Number(video.videoHeight || 0);
+        if (width > 0 && height > 0) {
+          const canvas = document.createElement('canvas');
+          canvas.width = width;
+          canvas.height = height;
+          const context = canvas.getContext('2d');
+          if (context) {
+            context.drawImage(video, 0, 0, width, height);
+            const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+            if (dataUrl && dataUrl.startsWith('data:image/')) {
+              video.setAttribute('poster', dataUrl);
+            }
+          }
+        }
+      } catch (err) {
+        // Ignore poster generation failures.
+      }
+
+      try {
+        video.currentTime = 0;
+      } catch (err) {
+        // Ignore seek reset failures.
+      }
+      finalize();
+    }
+
+    function captureFrame() {
+      const duration = Number(video.duration || 0);
+      let seekTime = 0.05;
+      if (Number.isFinite(duration) && duration > 0 && duration < seekTime) {
+        seekTime = Math.max(0, duration / 2);
+      }
+      const onSeeked = () => {
+        video.removeEventListener('seeked', onSeeked);
+        drawPoster();
+      };
+      video.addEventListener('seeked', onSeeked);
+      try {
+        video.currentTime = seekTime;
+      } catch (err) {
+        video.removeEventListener('seeked', onSeeked);
+        drawPoster();
+      }
+    }
+
+    if (video.readyState >= 2) {
+      captureFrame();
+      return;
+    }
+
+    video.addEventListener('loadeddata', captureFrame, { once: true });
+    video.addEventListener('error', finalize, { once: true });
+    window.setTimeout(finalize, 1800);
+  }
+
   function bindMediaFade(node) {
     if (!node) return;
     const tagName = String(node.tagName || '').toLowerCase();
@@ -318,12 +388,16 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
     if (tagName === 'video') {
-      if (node.readyState >= 2) {
+      tryBuildClientVideoPoster(node);
+      if (node.readyState >= 1 || node.getAttribute('poster')) {
         node.classList.add('is-media-loaded');
         return;
       }
       node.addEventListener('loadeddata', () => node.classList.add('is-media-loaded'));
+      node.addEventListener('loadedmetadata', () => node.classList.add('is-media-loaded'));
+      node.addEventListener('canplay', () => node.classList.add('is-media-loaded'));
       node.addEventListener('error', () => node.classList.add('is-media-loaded'));
+      window.setTimeout(() => node.classList.add('is-media-loaded'), 1500);
     }
   }
 
@@ -390,6 +464,282 @@ document.addEventListener('DOMContentLoaded', () => {
       previewImg.src = objectUrl;
     });
   }
+
+  function showUploadClientError(message) {
+    const fallback = 'Upload failed. Please try again.';
+    const text = String(message || fallback).trim() || fallback;
+    if (previewError) {
+      previewError.textContent = text;
+      previewError.hidden = false;
+    } else {
+      window.alert(text);
+    }
+  }
+
+  function supportsClientOptimization() {
+    return Boolean(window.fetch && window.FormData && window.File && window.Blob);
+  }
+
+  function canvasToJpegBlob(canvas, quality) {
+    return new Promise((resolve) => {
+      canvas.toBlob((blob) => resolve(blob || null), 'image/jpeg', quality);
+    });
+  }
+
+  function loadImageFromFile(file) {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      const blobUrl = URL.createObjectURL(file);
+      img.onload = () => {
+        URL.revokeObjectURL(blobUrl);
+        resolve(img);
+      };
+      img.onerror = () => {
+        URL.revokeObjectURL(blobUrl);
+        reject(new Error('Failed to decode image'));
+      };
+      img.src = blobUrl;
+    });
+  }
+
+  function buildJpgName(filename) {
+    const name = String(filename || 'upload').replace(/\.[^./\\]+$/, '');
+    return `${name}.jpg`;
+  }
+
+  async function optimizePhotoFile(file) {
+    const mime = String(file?.type || '').toLowerCase();
+    if (!mime.startsWith('image/')) return file;
+    if (mime === 'image/gif' || mime === 'image/png' || mime === 'image/svg+xml') return file;
+
+    const CLIENT_IMAGE_MIN_BYTES = 420 * 1024;
+    const CLIENT_IMAGE_MAX_DIMENSION = 1920;
+    const CLIENT_IMAGE_QUALITY = 0.82;
+
+    if (Number(file.size || 0) < CLIENT_IMAGE_MIN_BYTES) return file;
+
+    try {
+      const source = await loadImageFromFile(file);
+      const sourceW = Math.max(1, Number(source.naturalWidth || source.width || 1));
+      const sourceH = Math.max(1, Number(source.naturalHeight || source.height || 1));
+      const scale = Math.min(1, CLIENT_IMAGE_MAX_DIMENSION / Math.max(sourceW, sourceH));
+      const targetW = Math.max(1, Math.round(sourceW * scale));
+      const targetH = Math.max(1, Math.round(sourceH * scale));
+
+      if (targetW === sourceW && targetH === sourceH && file.size < 900 * 1024) return file;
+
+      const canvas = document.createElement('canvas');
+      canvas.width = targetW;
+      canvas.height = targetH;
+      const context = canvas.getContext('2d');
+      if (!context) return file;
+      context.drawImage(source, 0, 0, targetW, targetH);
+
+      const blob = await canvasToJpegBlob(canvas, CLIENT_IMAGE_QUALITY);
+      if (!blob || blob.size <= 0) return file;
+      if (blob.size >= file.size * 0.97) return file;
+
+      return new File([blob], buildJpgName(file.name), {
+        type: 'image/jpeg',
+        lastModified: Date.now()
+      });
+    } catch (err) {
+      return file;
+    }
+  }
+
+  async function optimizePhotoFiles(files) {
+    const optimized = [];
+    for (const file of files) {
+      // Sequential processing avoids freezing low-end devices on large batches.
+      // eslint-disable-next-line no-await-in-loop
+      optimized.push(await optimizePhotoFile(file));
+    }
+    return optimized;
+  }
+
+  function setUploadFormBusy(form, isBusy) {
+    form.dataset.clientBusy = isBusy ? '1' : '0';
+    const buttons = Array.from(form.querySelectorAll('button[type="submit"]'));
+    buttons.forEach((button) => {
+      if (isBusy) {
+        if (!button.dataset.originalText) button.dataset.originalText = button.textContent || '';
+        button.disabled = true;
+        button.textContent = 'Uploading...';
+      } else {
+        button.disabled = false;
+        if (button.dataset.originalText) button.textContent = button.dataset.originalText;
+      }
+    });
+  }
+
+  async function submitOptimizedUploadForm(form) {
+    if (form.dataset.clientBusy === '1') return;
+    const photosInput = form.querySelector('input[name="photos"]');
+    const videoInput = form.querySelector('input[name="video"]');
+    if (!photosInput) {
+      form.submit();
+      return;
+    }
+
+    const maxImageCount = Number.parseInt(photosInput.dataset.maxCount || '10', 10) || 10;
+    const maxVideoMb = Number.parseInt((videoInput && videoInput.dataset.maxSizeMb) || '50', 10) || 50;
+    const maxVideoBytes = maxVideoMb * 1024 * 1024;
+    const selectedPhotos = Array.from(photosInput.files || []);
+    const selectedVideo = videoInput && videoInput.files ? Array.from(videoInput.files) : [];
+
+    if (selectedPhotos.length > maxImageCount) {
+      showUploadClientError(`You can upload up to ${maxImageCount} images per post.`);
+      return;
+    }
+    if (selectedVideo.length > 1) {
+      showUploadClientError('You can upload only 1 video per post.');
+      return;
+    }
+    if (selectedVideo[0] && Number(selectedVideo[0].size || 0) > maxVideoBytes) {
+      showUploadClientError(`Video must be ${maxVideoMb}MB or smaller.`);
+      return;
+    }
+
+    if (previewError) {
+      previewError.hidden = true;
+      previewError.textContent = '';
+    }
+
+    setUploadFormBusy(form, true);
+    try {
+      const optimizedPhotos = await optimizePhotoFiles(selectedPhotos);
+      const formData = new FormData(form);
+      formData.delete('photos');
+      optimizedPhotos.forEach((file) => formData.append('photos', file, file.name));
+      formData.delete('video');
+      if (selectedVideo[0]) formData.append('video', selectedVideo[0], selectedVideo[0].name);
+
+      const response = await fetch(form.action, {
+        method: (form.method || 'post').toUpperCase(),
+        body: formData,
+        credentials: 'same-origin',
+        redirect: 'follow'
+      });
+      const contentType = String(response.headers.get('content-type') || '').toLowerCase();
+
+      if (response.redirected) {
+        window.location.assign(response.url);
+        return;
+      }
+
+      if (contentType.includes('text/html')) {
+        const html = await response.text();
+        document.open();
+        document.write(html);
+        document.close();
+        return;
+      }
+
+      if (response.ok) {
+        window.location.reload();
+        return;
+      }
+
+      const errorText = (await response.text()).trim();
+      showUploadClientError(errorText || `Upload failed (${response.status}).`);
+    } catch (err) {
+      showUploadClientError('Upload failed while optimizing media. Please try again.');
+    } finally {
+      setUploadFormBusy(form, false);
+    }
+  }
+
+  if (supportsClientOptimization()) {
+    const uploadForms = Array.from(document.querySelectorAll('form.upload-form'))
+      .filter((form) => form.querySelector('input[name="photos"]'));
+    uploadForms.forEach((form) => {
+      form.addEventListener('submit', (event) => {
+        event.preventDefault();
+        submitOptimizedUploadForm(form);
+      });
+    });
+  }
+
+  function bindReactionForms() {
+    const reactionForms = Array.from(document.querySelectorAll('form.reaction-form'));
+    if (!reactionForms.length || !window.fetch || !window.FormData) return;
+
+    let reactionBusy = false;
+
+    function setReactionBusy(isBusy) {
+      reactionBusy = isBusy;
+      reactionForms.forEach((form) => {
+        const button = form.querySelector('button[type="submit"]');
+        if (!button) return;
+        button.disabled = isBusy;
+      });
+    }
+
+    function updateReactionButtons(reactionsState) {
+      const counts = (reactionsState && reactionsState.counts) || {};
+      const mine = reactionsState ? reactionsState.mine : null;
+      reactionForms.forEach((form) => {
+        const reaction = String(
+          form.getAttribute('data-reaction') ||
+          (form.querySelector('input[name="reaction"]') && form.querySelector('input[name="reaction"]').value) ||
+          ''
+        ).trim().toLowerCase();
+        const button = form.querySelector('button[type="submit"]');
+        if (!reaction || !button) return;
+        const count = Number(counts[reaction] || 0);
+        button.textContent = `${reaction} (${count})`;
+        button.className = mine === reaction ? 'pin-btn' : 'view-btn';
+        button.setAttribute('aria-pressed', mine === reaction ? 'true' : 'false');
+      });
+    }
+
+    reactionForms.forEach((form) => {
+      form.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        if (reactionBusy) return;
+        setReactionBusy(true);
+
+        try {
+          const response = await fetch(form.action, {
+            method: 'POST',
+            body: new FormData(form),
+            credentials: 'same-origin',
+            headers: {
+              Accept: 'application/json',
+              'X-Requested-With': 'XMLHttpRequest'
+            }
+          });
+
+          if (response.redirected) {
+            window.location.assign(response.url);
+            return;
+          }
+
+          const contentType = String(response.headers.get('content-type') || '').toLowerCase();
+          if (!contentType.includes('application/json')) {
+            window.location.reload();
+            return;
+          }
+
+          const payload = await response.json();
+          if (!response.ok || !payload || payload.ok !== true) {
+            const message = (payload && payload.error) ? payload.error : `Reaction failed (${response.status}).`;
+            window.alert(message);
+            return;
+          }
+
+          updateReactionButtons(payload.reactions);
+        } catch (err) {
+          window.alert('Reaction request failed. Please try again.');
+        } finally {
+          setReactionBusy(false);
+        }
+      });
+    });
+  }
+
+  bindReactionForms();
 
   const lightboxLinks = Array.from(document.querySelectorAll('[data-lightbox]'));
   if (lightboxLinks.length) {

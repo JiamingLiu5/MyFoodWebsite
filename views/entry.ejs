@@ -17,7 +17,7 @@
       <article class="entry detail-entry">
         <% if (entry.video_filename) { %>
           <section class="detail-video-wrap">
-            <video id="entryVideo" class="detail-video" controls preload="metadata">
+            <video id="entryVideo" class="detail-video" controls preload="metadata" <% if (entry.video_poster_filename) { %>poster="<%= fileUrl(entry.video_poster_filename) %>"<% } %>>
               <source src="<%= fileUrl(entry.video_filename) %>" <% if (entry.video_mimetype) { %>type="<%= entry.video_mimetype %>"<% } %> />
               Your browser does not support the video tag.
             </video>
@@ -27,7 +27,7 @@
           <section class="detail-gallery">
             <% entry.images.forEach(function(img) { %>
               <a class="detail-image-link" href="<%= fileUrl(img.filename) %>" data-lightbox>
-                <img src="<%= fileUrl(img.filename) %>" alt="photo" />
+                <img src="<%= fileUrl(img.filename) %>" alt="photo" loading="lazy" decoding="async" />
               </a>
             <% }) %>
           </section>
@@ -99,7 +99,7 @@
           <h3 class="brand-subtitle">Reactions</h3>
           <div class="entry-actions">
             <% supportedReactions.forEach(function(reaction) { %>
-              <form class="inline-form" action="/entries/<%= entry.id %>/reactions" method="post">
+              <form class="inline-form reaction-form" action="/entries/<%= entry.id %>/reactions" method="post" data-reaction="<%= reaction %>">
                 <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
                 <input type="hidden" name="reaction" value="<%= reaction %>" />
                 <button class="<%= reactions.mine === reaction ? 'pin-btn' : 'view-btn' %>" type="submit">

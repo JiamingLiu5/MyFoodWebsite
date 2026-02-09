@@ -1,7 +1,9 @@
 require('dotenv').config();
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
 const crypto = require('crypto');
+const { spawn } = require('child_process');
 const express = require('express');
 const multer = require('multer');
 const sqlite3 = require('sqlite3').verbose();
@@ -30,6 +32,9 @@ const MAX_VIDEO_FILE_SIZE_MB = Math.max(1, Number.parseInt(process.env.MAX_VIDEO
 const MAX_VIDEO_FILE_SIZE_BYTES = MAX_VIDEO_FILE_SIZE_MB * 1024 * 1024;
 const MAX_MEDIA_UPLOAD_FILE_SIZE_BYTES = Math.max(MAX_UPLOAD_FILE_SIZE_BYTES, MAX_VIDEO_FILE_SIZE_BYTES);
 const MAX_FILES_PER_POST = MAX_IMAGES_PER_POST + 1;
+const ENABLE_SERVER_VIDEO_PROCESSING = process.env.ENABLE_SERVER_VIDEO_PROCESSING === 'true';
+const ENABLE_VIDEO_TRANSCODE = process.env.ENABLE_VIDEO_TRANSCODE === 'true';
+const FFMPEG_PATH = String(process.env.FFMPEG_PATH || 'ffmpeg').trim() || 'ffmpeg';
 const AUTH_RATE_LIMIT_WINDOW_MINUTES = Math.max(1, Number.parseInt(process.env.AUTH_RATE_LIMIT_WINDOW_MINUTES || '15', 10));
 const AUTH_RATE_LIMIT_MAX_ATTEMPTS = Math.max(1, Number.parseInt(process.env.AUTH_RATE_LIMIT_MAX_ATTEMPTS || '25', 10));
 const AUTH_RATE_LIMIT_WINDOW_MS = AUTH_RATE_LIMIT_WINDOW_MINUTES * 60 * 1000;
@@ -204,6 +209,8 @@ db.serialize(() => {
     video_filename TEXT,
     video_originalname TEXT,
     video_mimetype TEXT,
+    video_poster_filename TEXT,
+    video_poster_originalname TEXT,
     note TEXT,
     is_pinned INTEGER DEFAULT 0,
     created_at INTEGER,
@@ -282,6 +289,20 @@ db.serialize(() => {
       db.run('ALTER TABLE entries ADD COLUMN video_mimetype TEXT', (alterErr) => {
         if (alterErr) console.error('entries video_mimetype migration error:', alterErr);
         else console.log('✓ Added video_mimetype column to entries');
+      });
+    }
+    const hasVideoPosterFilename = Array.isArray(cols) && cols.some((col) => col.name === 'video_poster_filename');
+    if (!hasVideoPosterFilename) {
+      db.run('ALTER TABLE entries ADD COLUMN video_poster_filename TEXT', (alterErr) => {
+        if (alterErr) console.error('entries video_poster_filename migration error:', alterErr);
+        else console.log('✓ Added video_poster_filename column to entries');
+      });
+    }
+    const hasVideoPosterOriginalname = Array.isArray(cols) && cols.some((col) => col.name === 'video_poster_originalname');
+    if (!hasVideoPosterOriginalname) {
+      db.run('ALTER TABLE entries ADD COLUMN video_poster_originalname TEXT', (alterErr) => {
+        if (alterErr) console.error('entries video_poster_originalname migration error:', alterErr);
+        else console.log('✓ Added video_poster_originalname column to entries');
       });
     }
     db.run('CREATE INDEX IF NOT EXISTS idx_entries_created_at ON entries(created_at)');
@@ -627,6 +648,156 @@ async function storeUploadedFile(file) {
   }
 
   return { key, originalname: file.originalname || null };
+}
+
+let ffmpegAvailabilityChecked = false;
+let ffmpegAvailable = false;
+
+function isLikelyMovVideo(videoFile) {
+  const ext = path.extname(String(videoFile?.originalname || '')).toLowerCase();
+  const mime = String(videoFile?.mimetype || '').toLowerCase();
+  return ext === '.mov' || mime === 'video/quicktime';
+}
+
+async function checkFfmpegAvailable() {
+  if (ffmpegAvailabilityChecked) return ffmpegAvailable;
+  ffmpegAvailabilityChecked = true;
+  ffmpegAvailable = await new Promise((resolve) => {
+    const child = spawn(FFMPEG_PATH, ['-version'], { stdio: 'ignore' });
+    child.on('error', () => resolve(false));
+    child.on('close', (code) => resolve(code === 0));
+  });
+  if (!ffmpegAvailable) {
+    console.warn('ffmpeg not available; MOV transcoding and poster generation are disabled.');
+  }
+  return ffmpegAvailable;
+}
+
+function runFfmpeg(args) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(FFMPEG_PATH, args, { stdio: ['ignore', 'ignore', 'pipe'] });
+    let stderr = '';
+    child.stderr.on('data', (chunk) => {
+      if (!chunk) return;
+      stderr += chunk.toString();
+      if (stderr.length > 3000) stderr = stderr.slice(-3000);
+    });
+    child.on('error', reject);
+    child.on('close', (code) => {
+      if (code === 0) return resolve();
+      return reject(new Error(`ffmpeg exited with code ${code}: ${stderr}`));
+    });
+  });
+}
+
+function toMp4OriginalName(originalname) {
+  const base = path.basename(String(originalname || 'video'), path.extname(String(originalname || 'video')));
+  return `${base}.mp4`;
+}
+
+function toPosterOriginalName(originalname) {
+  const base = path.basename(String(originalname || 'video'), path.extname(String(originalname || 'video')));
+  return `${base}-poster.jpg`;
+}
+
+async function prepareVideoAssets(videoFile) {
+  if (!videoFile) {
+    return {
+      videoFile: null,
+      posterFile: null,
+      transcoded: false
+    };
+  }
+
+  if (!ENABLE_SERVER_VIDEO_PROCESSING) {
+    return {
+      videoFile,
+      posterFile: null,
+      transcoded: false
+    };
+  }
+
+  const ffmpegReady = await checkFfmpegAvailable();
+  if (!ffmpegReady) {
+    return {
+      videoFile,
+      posterFile: null,
+      transcoded: false
+    };
+  }
+
+  const tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'myfood-video-'));
+  const inputExt = path.extname(String(videoFile.originalname || '')).toLowerCase() || '.bin';
+  const inputPath = path.join(tempDir, `input${inputExt}`);
+  const outputPosterPath = path.join(tempDir, 'poster.jpg');
+  const outputVideoPath = path.join(tempDir, 'video.mp4');
+
+  let preparedVideo = videoFile;
+  let posterFile = null;
+  let transcoded = false;
+
+  try {
+    await fs.promises.writeFile(inputPath, videoFile.buffer);
+
+    try {
+      await runFfmpeg([
+        '-y',
+        '-i',
+        inputPath,
+        '-frames:v',
+        '1',
+        '-q:v',
+        '3',
+        outputPosterPath
+      ]);
+      const posterBuffer = await fs.promises.readFile(outputPosterPath);
+      posterFile = {
+        originalname: toPosterOriginalName(videoFile.originalname),
+        mimetype: 'image/jpeg',
+        size: posterBuffer.length,
+        buffer: posterBuffer
+      };
+    } catch (posterErr) {
+      console.warn('video poster generation failed:', posterErr.message);
+    }
+
+    if (ENABLE_VIDEO_TRANSCODE && isLikelyMovVideo(videoFile)) {
+      try {
+        await runFfmpeg([
+          '-y',
+          '-i',
+          inputPath,
+          '-c:v',
+          'libx264',
+          '-pix_fmt',
+          'yuv420p',
+          '-c:a',
+          'aac',
+          '-movflags',
+          '+faststart',
+          outputVideoPath
+        ]);
+        const videoBuffer = await fs.promises.readFile(outputVideoPath);
+        preparedVideo = {
+          originalname: toMp4OriginalName(videoFile.originalname),
+          mimetype: 'video/mp4',
+          size: videoBuffer.length,
+          buffer: videoBuffer
+        };
+        transcoded = true;
+      } catch (transcodeErr) {
+        console.warn('video transcode failed; keeping original upload:', transcodeErr.message);
+      }
+    }
+  } finally {
+    await fs.promises.rm(tempDir, { recursive: true, force: true });
+  }
+
+  return {
+    videoFile: preparedVideo,
+    posterFile,
+    transcoded
+  };
 }
 
 function getUploadFieldFiles(req, fieldName) {
@@ -1097,6 +1268,7 @@ app.get('/', async (req, res) => {
       canRegister: true, // Always allow registration now
       uploadError,
       maxImagesPerPost: MAX_IMAGES_PER_POST,
+      maxVideoFileSizeMb: MAX_VIDEO_FILE_SIZE_MB,
       showPinnedOnly: !isAdmin,
       filters,
       filterCollections,
@@ -1122,6 +1294,8 @@ app.post('/upload', ensureAuth, uploadPostMedia, verifyCsrfToken, async (req, re
   }
   const storedPhotos = [];
   let storedVideo = null;
+  let storedVideoPoster = null;
+  let videoWasTranscoded = false;
 
   try {
     const { startMs, endMs } = getDayRangeMs();
@@ -1135,8 +1309,14 @@ app.post('/upload', ensureAuth, uploadPostMedia, verifyCsrfToken, async (req, re
       storedPhotos.push(stored);
     }
     if (videoFile) {
-      const stored = await storeUploadedFile(videoFile);
-      storedVideo = { ...stored, mimetype: videoFile.mimetype || null };
+      const preparedVideo = await prepareVideoAssets(videoFile);
+      const stored = await storeUploadedFile(preparedVideo.videoFile);
+      storedVideo = { ...stored, mimetype: preparedVideo.videoFile.mimetype || null };
+      videoWasTranscoded = preparedVideo.transcoded === true;
+      if (preparedVideo.posterFile) {
+        const storedPoster = await storeUploadedFile(preparedVideo.posterFile);
+        storedVideoPoster = storedPoster;
+      }
     }
 
     const first = storedPhotos[0] || null;
@@ -1145,15 +1325,18 @@ app.post('/upload', ensureAuth, uploadPostMedia, verifyCsrfToken, async (req, re
     const isDraft = saveAsDraft ? 1 : 0;
     const insertResult = await dbRunAsync(
       `INSERT INTO entries(
-        filename, originalname, video_filename, video_originalname, video_mimetype, note,
+        filename, originalname, video_filename, video_originalname, video_mimetype,
+        video_poster_filename, video_poster_originalname, note,
         is_pinned, created_at, user_id, is_draft, collection_id
-      ) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       [
         first ? first.key : null,
         first ? first.originalname : null,
         storedVideo ? storedVideo.key : null,
         storedVideo ? storedVideo.originalname : null,
         storedVideo ? storedVideo.mimetype : null,
+        storedVideoPoster ? storedVideoPoster.key : null,
+        storedVideoPoster ? storedVideoPoster.originalname : null,
         note,
         0,
         createdAt,
@@ -1174,6 +1357,8 @@ app.post('/upload', ensureAuth, uploadPostMedia, verifyCsrfToken, async (req, re
     await appendAuditLog(req, 'entry.create', 'entry', insertResult.lastID, {
       imageCount: storedPhotos.length,
       hasVideo: Boolean(storedVideo),
+      hasVideoPoster: Boolean(storedVideoPoster),
+      videoWasTranscoded,
       isDraft: isDraft === 1
     });
 
@@ -1182,6 +1367,7 @@ app.post('/upload', ensureAuth, uploadPostMedia, verifyCsrfToken, async (req, re
     console.error(err);
     const cleanup = storedPhotos.map((item) => deleteStoredFile(item.key));
     if (storedVideo) cleanup.push(deleteStoredFile(storedVideo.key));
+    if (storedVideoPoster) cleanup.push(deleteStoredFile(storedVideoPoster.key));
     await Promise.allSettled(cleanup);
     res.status(500).send('Upload error');
   }
@@ -1275,6 +1461,7 @@ app.get('/entries/:id/edit', ensureOwnerOrAdmin, async (req, res) => {
       entry: { ...row, images, tags, tagText: tags.join(', ') },
       error: null,
       maxImagesPerPost: MAX_IMAGES_PER_POST,
+      maxVideoFileSizeMb: MAX_VIDEO_FILE_SIZE_MB,
       userCollections
     });
   } catch (err) {
@@ -1305,6 +1492,8 @@ app.post('/entries/:id/edit', ensureOwnerOrAdmin, uploadPostMedia, verifyCsrfTok
   const newVideoFile = getUploadFieldFiles(req, 'video')[0] || null;
   const newlyStoredImages = [];
   let newlyStoredVideo = null;
+  let newlyStoredVideoPoster = null;
+  let videoWasTranscoded = false;
 
   try {
     const row = await dbGetAsync('SELECT * FROM entries WHERE id = ?', [entryId]);
@@ -1325,6 +1514,7 @@ app.post('/entries/:id/edit', ensureOwnerOrAdmin, uploadPostMedia, verifyCsrfTok
         },
         error: mediaError,
         maxImagesPerPost: MAX_IMAGES_PER_POST,
+        maxVideoFileSizeMb: MAX_VIDEO_FILE_SIZE_MB,
         userCollections: await getUserCollections(req.session.userId)
       });
     }
@@ -1345,6 +1535,7 @@ app.post('/entries/:id/edit', ensureOwnerOrAdmin, uploadPostMedia, verifyCsrfTok
         },
         error: `You can store up to ${MAX_IMAGES_PER_POST} images in one post.`,
         maxImagesPerPost: MAX_IMAGES_PER_POST,
+        maxVideoFileSizeMb: MAX_VIDEO_FILE_SIZE_MB,
         userCollections: await getUserCollections(req.session.userId)
       });
     }
@@ -1354,8 +1545,14 @@ app.post('/entries/:id/edit', ensureOwnerOrAdmin, uploadPostMedia, verifyCsrfTok
       newlyStoredImages.push(stored);
     }
     if (newVideoFile) {
-      const stored = await storeUploadedFile(newVideoFile);
-      newlyStoredVideo = { ...stored, mimetype: newVideoFile.mimetype || null };
+      const preparedVideo = await prepareVideoAssets(newVideoFile);
+      const stored = await storeUploadedFile(preparedVideo.videoFile);
+      newlyStoredVideo = { ...stored, mimetype: preparedVideo.videoFile.mimetype || null };
+      videoWasTranscoded = preparedVideo.transcoded === true;
+      if (preparedVideo.posterFile) {
+        const storedPoster = await storeUploadedFile(preparedVideo.posterFile);
+        newlyStoredVideoPoster = storedPoster;
+      }
     }
 
     if (imagesToRemove.length > 0) {
@@ -1394,17 +1591,26 @@ app.post('/entries/:id/edit', ensureOwnerOrAdmin, uploadPostMedia, verifyCsrfTok
     let nextVideoFilename = row.video_filename || null;
     let nextVideoOriginalname = row.video_originalname || null;
     let nextVideoMimetype = row.video_mimetype || null;
+    let nextVideoPosterFilename = row.video_poster_filename || null;
+    let nextVideoPosterOriginalname = row.video_poster_originalname || null;
     let videoToDelete = null;
+    let videoPosterToDelete = null;
     if (newlyStoredVideo) {
       videoToDelete = row.video_filename || null;
+      videoPosterToDelete = row.video_poster_filename || null;
       nextVideoFilename = newlyStoredVideo.key;
       nextVideoOriginalname = newlyStoredVideo.originalname;
       nextVideoMimetype = newlyStoredVideo.mimetype;
+      nextVideoPosterFilename = newlyStoredVideoPoster ? newlyStoredVideoPoster.key : null;
+      nextVideoPosterOriginalname = newlyStoredVideoPoster ? newlyStoredVideoPoster.originalname : null;
     } else if (removeVideo) {
       videoToDelete = row.video_filename || null;
+      videoPosterToDelete = row.video_poster_filename || null;
       nextVideoFilename = null;
       nextVideoOriginalname = null;
       nextVideoMimetype = null;
+      nextVideoPosterFilename = null;
+      nextVideoPosterOriginalname = null;
     }
 
     const firstImage = await dbGetAsync(
@@ -1418,7 +1624,7 @@ app.post('/entries/:id/edit', ensureOwnerOrAdmin, uploadPostMedia, verifyCsrfTok
     await dbRunAsync(
       `UPDATE entries
        SET filename = ?, originalname = ?, video_filename = ?, video_originalname = ?, video_mimetype = ?,
-           note = ?, is_draft = ?, collection_id = ?, is_pinned = ?
+           video_poster_filename = ?, video_poster_originalname = ?, note = ?, is_draft = ?, collection_id = ?, is_pinned = ?
        WHERE id = ?`,
       [
         firstImage ? firstImage.filename : null,
@@ -1426,6 +1632,8 @@ app.post('/entries/:id/edit', ensureOwnerOrAdmin, uploadPostMedia, verifyCsrfTok
         nextVideoFilename,
         nextVideoOriginalname,
         nextVideoMimetype,
+        nextVideoPosterFilename,
+        nextVideoPosterOriginalname,
         note,
         isDraft,
         collectionId,
@@ -1443,11 +1651,22 @@ app.post('/entries/:id/edit', ensureOwnerOrAdmin, uploadPostMedia, verifyCsrfTok
         }
       }
     }
+    if (videoPosterToDelete) {
+      try {
+        await deleteStoredFile(videoPosterToDelete);
+      } catch (fileErr) {
+        if (fileErr.code !== 'ENOENT' && fileErr.name !== 'NoSuchKey') {
+          console.error('Video poster delete error:', fileErr);
+        }
+      }
+    }
 
     await setEntryTags(entryId, tagsInput);
     await appendAuditLog(req, 'entry.edit', 'entry', entryId, {
       imageCount: nextSort,
       hasVideo: Boolean(nextVideoFilename),
+      hasVideoPoster: Boolean(nextVideoPosterFilename),
+      videoWasTranscoded,
       isDraft: isDraft === 1
     });
 
@@ -1456,6 +1675,7 @@ app.post('/entries/:id/edit', ensureOwnerOrAdmin, uploadPostMedia, verifyCsrfTok
     console.error(err);
     const cleanup = newlyStoredImages.map((item) => deleteStoredFile(item.key));
     if (newlyStoredVideo) cleanup.push(deleteStoredFile(newlyStoredVideo.key));
+    if (newlyStoredVideoPoster) cleanup.push(deleteStoredFile(newlyStoredVideoPoster.key));
     await Promise.allSettled(cleanup);
     res.status(500).send('Edit error');
   }
@@ -1530,15 +1750,24 @@ app.post('/entries/:id/comments', ensureAuth, verifyCsrfToken, async (req, res) 
 });
 
 app.post('/entries/:id/reactions', ensureAuth, verifyCsrfToken, async (req, res) => {
+  const expectsJson = (
+    String(req.get('x-requested-with') || '').toLowerCase() === 'xmlhttprequest' ||
+    String(req.get('accept') || '').toLowerCase().includes('application/json')
+  );
+  const sendError = (statusCode, message) => {
+    if (expectsJson) return res.status(statusCode).json({ ok: false, error: message });
+    return res.status(statusCode).send(message);
+  };
+
   const entryId = Number.parseInt(req.params.id, 10);
-  if (!Number.isInteger(entryId) || entryId <= 0) return res.status(400).send('Invalid entry id');
+  if (!Number.isInteger(entryId) || entryId <= 0) return sendError(400, 'Invalid entry id');
   const reaction = String(req.body.reaction || '').trim().toLowerCase();
-  if (!SUPPORTED_REACTIONS.includes(reaction)) return res.status(400).send('Unsupported reaction');
+  if (!SUPPORTED_REACTIONS.includes(reaction)) return sendError(400, 'Unsupported reaction');
 
   try {
     const row = await dbGetAsync('SELECT id, user_id, is_pinned, is_draft, deleted_at FROM entries WHERE id = ?', [entryId]);
-    if (!row) return res.status(404).send('Entry not found');
-    if (!canViewEntry(row, req) || row.deleted_at != null) return res.status(403).send('Not allowed');
+    if (!row) return sendError(404, 'Entry not found');
+    if (!canViewEntry(row, req) || row.deleted_at != null) return sendError(403, 'Not allowed');
 
     const existing = await dbGetAsync(
       'SELECT reaction FROM entry_reactions WHERE entry_id = ? AND user_id = ?',
@@ -1558,10 +1787,18 @@ app.post('/entries/:id/reactions', ensureAuth, verifyCsrfToken, async (req, res)
       );
       await appendAuditLog(req, 'reaction.set', 'entry', entryId, { reaction });
     }
-    res.redirect(`/entries/${entryId}`);
+    const latestReactions = await getEntryReactions(entryId, req.session.userId);
+    if (expectsJson) {
+      return res.json({
+        ok: true,
+        reactions: latestReactions
+      });
+    }
+    return res.redirect(`/entries/${entryId}`);
   } catch (err) {
     console.error(err);
-    res.status(500).send('Reaction error');
+    if (expectsJson) return res.status(500).json({ ok: false, error: 'Reaction error' });
+    return res.status(500).send('Reaction error');
   }
 });
 
@@ -1752,7 +1989,10 @@ app.post('/admin/users/:id/delete', ensureAdmin, verifyCsrfToken, async (req, re
     }
 
     // Delete user's entries and associated media
-    const entries = await dbAllAsync('SELECT id, video_filename FROM entries WHERE user_id = ?', [targetUserId]);
+    const entries = await dbAllAsync(
+      'SELECT id, video_filename, video_poster_filename FROM entries WHERE user_id = ?',
+      [targetUserId]
+    );
     for (const entry of entries) {
       const images = await dbAllAsync('SELECT filename FROM entry_images WHERE entry_id = ?', [entry.id]);
       for (const img of images) {
@@ -1760,6 +2000,9 @@ app.post('/admin/users/:id/delete', ensureAdmin, verifyCsrfToken, async (req, re
       }
       if (entry.video_filename) {
         await deleteStoredFile(entry.video_filename);
+      }
+      if (entry.video_poster_filename) {
+        await deleteStoredFile(entry.video_poster_filename);
       }
       await dbRunAsync('DELETE FROM comments WHERE entry_id = ?', [entry.id]);
       await dbRunAsync('DELETE FROM entry_reactions WHERE entry_id = ?', [entry.id]);

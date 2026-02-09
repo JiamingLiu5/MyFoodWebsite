@@ -854,10 +854,11 @@ body.enable-reveal .entry.is-visible{opacity:1;transform:translateY(0) scale(1)}
 }
 
 .action-sidebar{
-  position:fixed;
+  position:absolute;
   left:12px;
-  top:12px;
-  transform:none;
+  top:0;
+  transform:translate3d(0, 12px, 0);
+  will-change:transform;
   z-index:10030;
   display:block;
   width:auto;
@@ -1097,7 +1098,7 @@ body.has-action-sidebar.sidebar-collapsed{
   .role-btn,.delete-btn{width:100%;font-size:12px;padding:6px 12px}
   .action-sidebar{
     left:12px;
-    top:12px;
+    top:0;
     right:auto;
     bottom:auto;
     width:auto;
@@ -1135,7 +1136,7 @@ body.has-action-sidebar.sidebar-collapsed{
   }
   .action-sidebar.is-collapsed{
     left:12px;
-    top:12px;
+    top:0;
     right:auto;
     bottom:auto;
   }

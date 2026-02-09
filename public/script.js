@@ -282,6 +282,39 @@ document.addEventListener('DOMContentLoaded', () => {
     setSidebarCollapsed(!isCollapsed);
   });
 
+  const SIDEBAR_FOLLOW_OFFSET = 12;
+  let sidebarCurrentY = window.scrollY + SIDEBAR_FOLLOW_OFFSET;
+  let sidebarTargetY = sidebarCurrentY;
+  let sidebarFollowRafId = 0;
+
+  function applySidebarOffset(y) {
+    actionSidebar.style.transform = `translate3d(0, ${Math.round(y)}px, 0)`;
+  }
+
+  function animateSidebarFollow() {
+    const delta = sidebarTargetY - sidebarCurrentY;
+    if (Math.abs(delta) < 0.2) {
+      sidebarCurrentY = sidebarTargetY;
+      applySidebarOffset(sidebarCurrentY);
+      sidebarFollowRafId = 0;
+      return;
+    }
+    sidebarCurrentY += delta * 0.2;
+    applySidebarOffset(sidebarCurrentY);
+    sidebarFollowRafId = window.requestAnimationFrame(animateSidebarFollow);
+  }
+
+  function queueSidebarFollow() {
+    sidebarTargetY = window.scrollY + SIDEBAR_FOLLOW_OFFSET;
+    if (!sidebarFollowRafId) {
+      sidebarFollowRafId = window.requestAnimationFrame(animateSidebarFollow);
+    }
+  }
+
+  applySidebarOffset(sidebarCurrentY);
+  window.addEventListener('scroll', queueSidebarFollow, { passive: true });
+  window.addEventListener('resize', queueSidebarFollow);
+
   const entries = Array.from(document.querySelectorAll('.entry'));
   if (entries.length) {
     document.body.classList.add('enable-reveal');

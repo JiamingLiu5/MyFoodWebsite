@@ -282,6 +282,25 @@ document.addEventListener('DOMContentLoaded', () => {
     setSidebarCollapsed(!isCollapsed);
   });
 
+  function syncSidebarScrollPosition() {
+    const topOffset = 10;
+    const nextTop = Math.max(topOffset, Math.round(window.scrollY + topOffset));
+    actionSidebar.style.top = `${nextTop}px`;
+  }
+
+  let sidebarScrollRaf = 0;
+  function requestSidebarScrollSync() {
+    if (sidebarScrollRaf) return;
+    sidebarScrollRaf = window.requestAnimationFrame(() => {
+      sidebarScrollRaf = 0;
+      syncSidebarScrollPosition();
+    });
+  }
+
+  syncSidebarScrollPosition();
+  window.addEventListener('scroll', requestSidebarScrollSync, { passive: true });
+  window.addEventListener('resize', requestSidebarScrollSync);
+
   const entries = Array.from(document.querySelectorAll('.entry'));
   if (entries.length) {
     document.body.classList.add('enable-reveal');
@@ -375,6 +394,37 @@ document.addEventListener('DOMContentLoaded', () => {
     window.setTimeout(finalize, 1800);
   }
 
+  function attachVideoPlaybackHint(video) {
+    if (!video) return;
+    const source = video.querySelector('source[src]');
+    const sourceUrl = source ? String(source.getAttribute('src') || '').trim() : '';
+    const sourceMime = source ? String(source.getAttribute('type') || '').toLowerCase() : '';
+    const isLikelyMov = sourceUrl.toLowerCase().includes('.mov') || sourceMime === 'video/quicktime';
+    if (!isLikelyMov) return;
+
+    const host = video.parentElement || video;
+    const showHint = () => {
+      if (!host || host.querySelector('.video-playback-hint')) return;
+      const hint = document.createElement('p');
+      hint.className = 'detail-hint video-playback-hint';
+      hint.textContent = 'This MOV may not play in this browser. Try Safari or upload an MP4/H.264 copy. ';
+      if (sourceUrl) {
+        const link = document.createElement('a');
+        link.href = sourceUrl;
+        link.textContent = 'Download video';
+        link.setAttribute('download', '');
+        hint.appendChild(link);
+      }
+      host.appendChild(hint);
+    };
+
+    const quicktimeSupport = String(video.canPlayType('video/quicktime')).trim();
+    if (!quicktimeSupport) {
+      showHint();
+    }
+    video.addEventListener('error', showHint);
+  }
+
   function bindMediaFade(node) {
     if (!node) return;
     const tagName = String(node.tagName || '').toLowerCase();
@@ -389,6 +439,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     if (tagName === 'video') {
       tryBuildClientVideoPoster(node);
+      attachVideoPlaybackHint(node);
       if (node.readyState >= 1 || node.getAttribute('poster')) {
         node.classList.add('is-media-loaded');
         return;
@@ -411,6 +462,28 @@ document.addEventListener('DOMContentLoaded', () => {
   const previewError = document.getElementById('uploadPreviewError');
 
   let objectUrl = null;
+  const HEIC_FILE_EXTENSIONS = new Set(['.heic', '.heif']);
+  const HEIC_MIME_TYPES = new Set(['image/heic', 'image/heif', 'image/heic-sequence', 'image/heif-sequence']);
+  const GENERIC_BINARY_MIME_TYPES = new Set(['', 'application/octet-stream', 'binary/octet-stream']);
+
+  function getFileExtension(filename) {
+    const name = String(filename || '');
+    const match = name.match(/(\.[^./\\]+)$/);
+    return match ? String(match[1]).toLowerCase() : '';
+  }
+
+  function isHeicImageFile(file) {
+    const mime = String(file?.type || '').trim().toLowerCase();
+    if (HEIC_MIME_TYPES.has(mime)) return true;
+    const ext = getFileExtension(file?.name);
+    return HEIC_FILE_EXTENSIONS.has(ext) && GENERIC_BINARY_MIME_TYPES.has(mime);
+  }
+
+  function isSupportedImageFile(file) {
+    const mime = String(file?.type || '').trim().toLowerCase();
+    if (mime.startsWith('image/')) return true;
+    return isHeicImageFile(file);
+  }
 
   function resetPreview() {
     if (!previewWrap || !previewImg || !previewName || !previewInfo || !previewError) return;
@@ -440,7 +513,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const totalMb = (totalBytes / (1024 * 1024)).toFixed(2);
       previewInfo.textContent = `${files.length} image(s), ${totalMb} MB total`;
 
-      if (first.type && !first.type.startsWith('image/')) {
+      if (!isSupportedImageFile(first)) {
         previewError.textContent = 'Selected file is not an image.';
         previewError.hidden = false;
         return;
@@ -509,8 +582,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
   async function optimizePhotoFile(file) {
     const mime = String(file?.type || '').toLowerCase();
+    if (!isSupportedImageFile(file)) return file;
     if (!mime.startsWith('image/')) return file;
     if (mime === 'image/gif' || mime === 'image/png' || mime === 'image/svg+xml') return file;
+    if (mime.includes('heic') || mime.includes('heif')) return file;
 
     const CLIENT_IMAGE_MIN_BYTES = 420 * 1024;
     const CLIENT_IMAGE_MAX_DIMENSION = 1920;

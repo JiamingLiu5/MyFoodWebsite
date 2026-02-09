@@ -854,7 +854,7 @@ body.enable-reveal .entry.is-visible{opacity:1;transform:translateY(0) scale(1)}
 }
 
 .action-sidebar{
-  position:fixed;
+  position:absolute;
   left:10px;
   top:10px;
   transform:none;

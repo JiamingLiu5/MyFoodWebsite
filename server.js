@@ -33,7 +33,7 @@ const MAX_VIDEO_FILE_SIZE_BYTES = MAX_VIDEO_FILE_SIZE_MB * 1024 * 1024;
 const MAX_MEDIA_UPLOAD_FILE_SIZE_BYTES = Math.max(MAX_UPLOAD_FILE_SIZE_BYTES, MAX_VIDEO_FILE_SIZE_BYTES);
 const MAX_FILES_PER_POST = MAX_IMAGES_PER_POST + 1;
 const ENABLE_SERVER_VIDEO_PROCESSING = process.env.ENABLE_SERVER_VIDEO_PROCESSING === 'true';
-const ENABLE_VIDEO_TRANSCODE = process.env.ENABLE_VIDEO_TRANSCODE === 'true';
+const ENABLE_VIDEO_TRANSCODE = process.env.ENABLE_VIDEO_TRANSCODE !== 'false';
 const FFMPEG_PATH = String(process.env.FFMPEG_PATH || 'ffmpeg').trim() || 'ffmpeg';
 const AUTH_RATE_LIMIT_WINDOW_MINUTES = Math.max(1, Number.parseInt(process.env.AUTH_RATE_LIMIT_WINDOW_MINUTES || '15', 10));
 const AUTH_RATE_LIMIT_MAX_ATTEMPTS = Math.max(1, Number.parseInt(process.env.AUTH_RATE_LIMIT_MAX_ATTEMPTS || '25', 10));
@@ -631,6 +631,38 @@ async function deleteStoredFile(filename) {
   await fs.promises.unlink(path.join(UPLOADS_DIR, safeFilename));
 }
 
+const HEIC_IMAGE_EXTENSIONS = new Set(['.heic', '.heif']);
+const HEIC_IMAGE_MIME_TYPES = new Set(['image/heic', 'image/heif', 'image/heic-sequence', 'image/heif-sequence']);
+const GENERIC_BINARY_MIME_TYPES = new Set(['', 'application/octet-stream', 'binary/octet-stream']);
+
+function getFileExtensionFromUpload(file) {
+  return path.extname(String(file?.originalname || '')).toLowerCase();
+}
+
+function getNormalizedMimeType(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function isHeicImageUpload(file) {
+  const mime = getNormalizedMimeType(file?.mimetype);
+  if (HEIC_IMAGE_MIME_TYPES.has(mime)) return true;
+  const ext = getFileExtensionFromUpload(file);
+  return HEIC_IMAGE_EXTENSIONS.has(ext) && GENERIC_BINARY_MIME_TYPES.has(mime);
+}
+
+function isSupportedPhotoUpload(file) {
+  const mime = getNormalizedMimeType(file?.mimetype);
+  if (mime.startsWith('image/')) return true;
+  return isHeicImageUpload(file);
+}
+
+function getStorageContentType(file) {
+  const mime = getNormalizedMimeType(file?.mimetype);
+  if (mime && !GENERIC_BINARY_MIME_TYPES.has(mime)) return mime;
+  if (isHeicImageUpload(file)) return 'image/heic';
+  return mime || 'application/octet-stream';
+}
+
 async function storeUploadedFile(file) {
   const safeOriginalName = (file.originalname || 'upload.bin').replace(/[^a-z0-9.\-\_]/gi, '_');
   const key = `${Date.now()}-${safeOriginalName}`;
@@ -640,7 +672,7 @@ async function storeUploadedFile(file) {
       Bucket: process.env.R2_BUCKET,
       Key: key,
       Body: file.buffer,
-      ContentType: file.mimetype
+      ContentType: getStorageContentType(file)
     });
     await s3.send(put);
   } else {
@@ -709,7 +741,9 @@ async function prepareVideoAssets(videoFile) {
     };
   }
 
-  if (!ENABLE_SERVER_VIDEO_PROCESSING) {
+  const shouldAttemptMovTranscode = isLikelyMovVideo(videoFile) && ENABLE_VIDEO_TRANSCODE;
+  const shouldGeneratePoster = ENABLE_SERVER_VIDEO_PROCESSING;
+  if (!shouldGeneratePoster && !shouldAttemptMovTranscode) {
     return {
       videoFile,
       posterFile: null,
@@ -719,6 +753,9 @@ async function prepareVideoAssets(videoFile) {
 
   const ffmpegReady = await checkFfmpegAvailable();
   if (!ffmpegReady) {
+    if (shouldAttemptMovTranscode) {
+      console.warn('MOV upload kept as-is because ffmpeg is unavailable; playback may fail in some browsers.');
+    }
     return {
       videoFile,
       posterFile: null,
@@ -739,29 +776,31 @@ async function prepareVideoAssets(videoFile) {
   try {
     await fs.promises.writeFile(inputPath, videoFile.buffer);
 
-    try {
-      await runFfmpeg([
-        '-y',
-        '-i',
-        inputPath,
-        '-frames:v',
-        '1',
-        '-q:v',
-        '3',
-        outputPosterPath
-      ]);
-      const posterBuffer = await fs.promises.readFile(outputPosterPath);
-      posterFile = {
-        originalname: toPosterOriginalName(videoFile.originalname),
-        mimetype: 'image/jpeg',
-        size: posterBuffer.length,
-        buffer: posterBuffer
-      };
-    } catch (posterErr) {
-      console.warn('video poster generation failed:', posterErr.message);
+    if (shouldGeneratePoster) {
+      try {
+        await runFfmpeg([
+          '-y',
+          '-i',
+          inputPath,
+          '-frames:v',
+          '1',
+          '-q:v',
+          '3',
+          outputPosterPath
+        ]);
+        const posterBuffer = await fs.promises.readFile(outputPosterPath);
+        posterFile = {
+          originalname: toPosterOriginalName(videoFile.originalname),
+          mimetype: 'image/jpeg',
+          size: posterBuffer.length,
+          buffer: posterBuffer
+        };
+      } catch (posterErr) {
+        console.warn('video poster generation failed:', posterErr.message);
+      }
     }
 
-    if (ENABLE_VIDEO_TRANSCODE && isLikelyMovVideo(videoFile)) {
+    if (shouldAttemptMovTranscode) {
       try {
         await runFfmpeg([
           '-y',
@@ -810,7 +849,7 @@ function validateUploadedMedia(photos, videoFile) {
   if (!Array.isArray(photos)) return 'Invalid image upload payload.';
   for (const file of photos) {
     if (!file || typeof file !== 'object') return 'Invalid image upload payload.';
-    if (!String(file.mimetype || '').startsWith('image/')) {
+    if (!isSupportedPhotoUpload(file)) {
       return 'Only image files are allowed for photos.';
     }
     if (Number(file.size || 0) > MAX_UPLOAD_FILE_SIZE_BYTES) {

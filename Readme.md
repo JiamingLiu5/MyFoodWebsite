@@ -4,11 +4,11 @@ This is a minimal Node.js + Express site to upload photos, one optional video pe
 
 Post features:
 
-- Multiple images per post (default max 10 per post).
+- Multiple images per post (default max 10 per post, including HEIC/HEIF uploads).
 - One optional video per post.
 - Video poster preview from first frame generated on the client side.
 - Client-side image optimization before upload (resize/compress) to reduce server and bandwidth load.
-- Optional server-side ffmpeg processing for poster generation and `.mov` to `.mp4` transcoding.
+- Optional server-side ffmpeg poster generation and automatic `.mov` to `.mp4` transcoding for browser compatibility.
 - Single-post detail page with full-size image viewer on click.
 - Edit and delete existing posts.
 - Pin/unpin posts (pinned posts stay at top for logged-in users).
@@ -43,7 +43,8 @@ Optional for server-side video processing support:
 brew install ffmpeg
 ```
 
-Then set `ENABLE_SERVER_VIDEO_PROCESSING=true` (and optionally `ENABLE_VIDEO_TRANSCODE=true`) in your env.
+`ENABLE_VIDEO_TRANSCODE` defaults to `true` (recommended) so `.mov` uploads can be converted to browser-friendly `.mp4`.
+Set `ENABLE_SERVER_VIDEO_PROCESSING=true` if you also want ffmpeg-generated poster images on the server.
 
 2. Start the server
 
@@ -117,8 +118,8 @@ Environment variables:
 - `MAX_IMAGES_PER_POST` — max images allowed in one post (default `10`)
 - `MAX_UPLOAD_FILE_SIZE_MB` — max size per uploaded image in MB (default `10`)
 - `MAX_VIDEO_FILE_SIZE_MB` — max size for uploaded video in MB (default `50`)
-- `ENABLE_SERVER_VIDEO_PROCESSING` — set `true` to enable ffmpeg-based server processing for posters/transcoding (default `false`)
-- `ENABLE_VIDEO_TRANSCODE` — when server processing is enabled, set `true` to auto-transcode `.mov` to `.mp4` (default `false`)
+- `ENABLE_SERVER_VIDEO_PROCESSING` — set `true` to enable ffmpeg-based server poster generation (default `false`)
+- `ENABLE_VIDEO_TRANSCODE` — auto-transcode `.mov` uploads to `.mp4` when ffmpeg is available (default `true`)
 - `FFMPEG_PATH` — ffmpeg binary path (default `ffmpeg`)
 - `BODY_LIMIT` — max URL-encoded body size (default `256kb`)
 - `AUTH_RATE_LIMIT_WINDOW_MINUTES` — auth brute-force window size (default `15`)
@@ -142,7 +143,7 @@ export SMTP_FROM="no-reply@ldnmeals.com"
 export MAX_UPLOAD_FILE_SIZE_MB="10"
 export MAX_VIDEO_FILE_SIZE_MB="50"
 export ENABLE_SERVER_VIDEO_PROCESSING="false"
-export ENABLE_VIDEO_TRANSCODE="false"
+export ENABLE_VIDEO_TRANSCODE="true"
 export FFMPEG_PATH="ffmpeg"
 export AUTH_RATE_LIMIT_WINDOW_MINUTES="15"
 export AUTH_RATE_LIMIT_MAX_ATTEMPTS="25"

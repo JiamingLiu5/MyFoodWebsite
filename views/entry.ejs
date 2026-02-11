@@ -46,6 +46,9 @@
           <% if (entry.collection_name) { %>
             <div class="author-note">Collection: <strong><%= entry.collection_name %></strong></div>
           <% } %>
+          <% if (entry.location_text) { %>
+            <div class="author-note">Location: <strong><%= entry.location_text %></strong></div>
+          <% } %>
           <div class="note"><%= entry.note ? entry.note : '(no note)' %></div>
           <% if (entry.tags && entry.tags.length > 0) { %>
             <div class="tags-row">

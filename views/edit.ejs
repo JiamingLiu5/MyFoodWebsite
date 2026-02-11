@@ -79,6 +79,8 @@
         <% } %>
         <label>Note</label>
         <textarea name="note" rows="4" placeholder="Update your note..."><%= entry.note || '' %></textarea>
+        <label>Location</label>
+        <input name="location" value="<%= entry.location_text || '' %>" placeholder="e.g. Tokyo Station, Home kitchen, Downtown LA" />
         <label>Tags (comma separated)</label>
         <input name="tags" value="<%= entry.tagText || '' %>" placeholder="spicy, sushi, weekend" />
         <label>Author</label>

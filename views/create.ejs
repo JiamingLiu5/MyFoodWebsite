@@ -1,0 +1,92 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Create Post</title>
+    <link rel="stylesheet" href="/static/style.css" />
+    <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
+  </head>
+  <body>
+    <div class="container">
+      <header class="detail-header">
+        <h1 class="brand-title">Create Post</h1>
+        <a href="/">Back</a>
+      </header>
+
+      <% if (uploadError) { %>
+        <p class="upload-error"><%= uploadError %></p>
+      <% } %>
+
+      <form action="/upload" method="post" enctype="multipart/form-data" class="upload-form create-post-form">
+        <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
+        <div class="form-field">
+          <label>Photos (optional, up to <%= maxImagesPerPost %>)</label>
+          <input
+            type="file"
+            name="photos"
+            accept="image/*,.heic,.heif,image/heic,image/heif"
+            multiple
+            data-max-count="<%= maxImagesPerPost %>"
+          />
+        </div>
+        <div class="form-field">
+          <label>Video (optional, 1 file)</label>
+          <input
+            type="file"
+            name="video"
+            accept="video/*"
+            data-max-size-mb="<%= maxVideoFileSizeMb %>"
+          />
+        </div>
+        <div class="upload-preview" id="uploadPreview" hidden>
+          <img id="uploadPreviewImg" alt="Selected photo preview" />
+          <div class="upload-preview-meta">
+            <div id="uploadPreviewName"></div>
+            <div id="uploadPreviewInfo"></div>
+          </div>
+        </div>
+        <p id="uploadPreviewError" class="upload-preview-error" hidden></p>
+        <div class="form-field">
+          <label>Note</label>
+          <textarea name="note" rows="3" placeholder="Write something about this photo..."></textarea>
+        </div>
+        <div class="form-field">
+          <label>Location</label>
+          <input name="location" placeholder="e.g. Tokyo Station, Home kitchen, Downtown LA" />
+        </div>
+        <div class="form-field">
+          <label>Rating (0-10)</label>
+          <input type="number" name="rating" min="0" max="10" step="0.1" placeholder="e.g. 8.5" />
+        </div>
+        <div class="create-post-grid">
+          <div class="form-field">
+            <label>Author</label>
+            <input name="authorLabel" placeholder="e.g. Dad, Mom, Kid A" />
+          </div>
+          <div class="form-field">
+            <label>Tags (comma separated)</label>
+            <input name="tags" placeholder="spicy, sushi, weekend" />
+          </div>
+          <div class="form-field">
+            <label>Collection</label>
+            <input list="collectionCreateOptions" name="collection" placeholder="e.g. Office Lunches" />
+          </div>
+        </div>
+        <datalist id="collectionCreateOptions">
+          <% userCollections.forEach(function(c) { %>
+            <option value="<%= c.name %>"></option>
+          <% }) %>
+        </datalist>
+        <div class="draft-row">
+          <label>
+            <input type="checkbox" name="saveAsDraft" value="1" />
+            Save as draft (visible only to you and admins)
+          </label>
+          <button type="submit">Save Post</button>
+        </div>
+      </form>
+    </div>
+    <script src="/static/script.js"></script>
+  </body>
+</html>

@@ -1385,6 +1385,27 @@ app.get('/', async (req, res) => {
   }
 });
 
+app.get('/entries/new', ensureAuth, async (req, res) => {
+  try {
+    const uploadError = req.query.error === 'daily_limit'
+      ? `Daily upload limit reached (${DAILY_UPLOAD_LIMIT} posts). Try again tomorrow.`
+      : null;
+    const userCollections = await getUserCollections(req.session.userId);
+    res.render('create', {
+      userId: req.session.userId,
+      userRole: req.userRole,
+      userCanPin: canPinPosts(req),
+      uploadError,
+      maxImagesPerPost: MAX_IMAGES_PER_POST,
+      maxVideoFileSizeMb: MAX_VIDEO_FILE_SIZE_MB,
+      userCollections
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).send('DB error');
+  }
+});
+
 app.post('/upload', ensureAuth, uploadPostMedia, verifyCsrfToken, async (req, res) => {
   const note = req.body.note || '';
   const tagsInput = req.body.tags || '';
@@ -1408,7 +1429,7 @@ app.post('/upload', ensureAuth, uploadPostMedia, verifyCsrfToken, async (req, re
     const { startMs, endMs } = getDayRangeMs();
     const dailyCount = await getEntryCountInRange(startMs, endMs);
     if (dailyCount >= DAILY_UPLOAD_LIMIT) {
-      return res.redirect('/?error=daily_limit');
+      return res.redirect('/entries/new?error=daily_limit');
     }
 
     for (const file of photoFiles) {

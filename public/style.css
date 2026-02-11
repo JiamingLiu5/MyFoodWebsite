@@ -243,11 +243,11 @@ body.has-create-fab .container{
   will-change:transform;
 }
 .create-post-fab.sidebar-fold-toggle{
-  min-width:42px;
-  width:42px;
-  height:42px;
-  min-height:42px;
-  font-size:24px;
+  min-width:50px;
+  width:50px;
+  height:50px;
+  min-height:50px;
+  font-size:28px;
   line-height:1;
   font-weight:700;
   z-index:2000;

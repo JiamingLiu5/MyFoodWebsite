@@ -1210,10 +1210,10 @@ async function getVisibleCommentCountsMap(entryIds, viewerUserId, viewerRole) {
 }
 
 const REACTION_OPTIONS = [
-  { value: 'thumb_up', label: 'Thumb Up 👍' },
-  { value: 'thumb_down', label: 'Thumb Down 👎' },
-  { value: 'excited', label: 'Excited 🤩' },
-  { value: 'drooling', label: 'Drooling 🤤' }
+  { value: 'thumb_up', label: '👍' },
+  { value: 'thumb_down', label: '👎' },
+  { value: 'excited', label: '🤩' },
+  { value: 'drooling', label: '🤤' }
 ];
 const SUPPORTED_REACTIONS = REACTION_OPTIONS.map((option) => option.value);
 

@@ -931,6 +931,41 @@ body.enable-reveal .entry.is-visible{opacity:1;transform:translateY(0) scale(1)}
   cursor:pointer;
 }
 .comment-composer > summary::-webkit-details-marker{display:none}
+.comment-bubble-btn{
+  position:relative;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  min-height:34px;
+  padding:6px 12px;
+  border-radius:14px;
+  border:1px solid color-mix(in srgb, var(--line) 82%, #8f9ba8);
+  background:color-mix(in srgb, var(--surface-strong) 74%, white);
+  color:color-mix(in srgb, var(--text) 84%, #2f4154);
+  text-decoration:none;
+  font-weight:700;
+  line-height:1;
+}
+.comment-bubble-btn::after{
+  content:'';
+  position:absolute;
+  right:10px;
+  bottom:-5px;
+  width:10px;
+  height:10px;
+  border-right:1px solid color-mix(in srgb, var(--line) 82%, #8f9ba8);
+  border-bottom:1px solid color-mix(in srgb, var(--line) 82%, #8f9ba8);
+  background:color-mix(in srgb, var(--surface-strong) 74%, white);
+  transform:rotate(40deg);
+}
+.comment-bubble-btn:hover{
+  background:color-mix(in srgb, var(--secondary-soft) 62%, white);
+  color:var(--secondary);
+}
+.comment-bubble-btn:focus-visible{
+  outline:2px solid color-mix(in srgb, var(--secondary) 55%, white);
+  outline-offset:2px;
+}
 .comment-form.compact{
   margin-top:8px;
   margin-bottom:0;

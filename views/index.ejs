@@ -252,7 +252,7 @@
                       <% }) %>
                       <% if (userId) { %>
                         <details class="comment-composer">
-                          <summary class="view-btn">Comment</summary>
+                          <summary class="comment-bubble-btn">Comment</summary>
                           <form class="upload-form comment-form compact" action="/entries/<%= e.id %>/comments" method="post">
                             <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
                             <input type="hidden" name="returnTo" value="/<%= currentFilterQuery %>" />
@@ -261,7 +261,7 @@
                           </form>
                         </details>
                       <% } else { %>
-                        <a class="view-btn" href="/login">Comment</a>
+                        <a class="comment-bubble-btn" href="/login">Comment</a>
                       <% } %>
                     </div>
 

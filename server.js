@@ -214,6 +214,7 @@ db.serialize(() => {
     note TEXT,
     author_label TEXT,
     location_text TEXT,
+    rating_value REAL,
     is_pinned INTEGER DEFAULT 0,
     created_at INTEGER,
     is_draft INTEGER DEFAULT 0,
@@ -284,6 +285,13 @@ db.serialize(() => {
       db.run('ALTER TABLE entries ADD COLUMN location_text TEXT', (alterErr) => {
         if (alterErr) console.error('entries location_text migration error:', alterErr);
         else console.log('✓ Added location_text column to entries');
+      });
+    }
+    const hasRatingValue = Array.isArray(cols) && cols.some((col) => col.name === 'rating_value');
+    if (!hasRatingValue) {
+      db.run('ALTER TABLE entries ADD COLUMN rating_value REAL', (alterErr) => {
+        if (alterErr) console.error('entries rating_value migration error:', alterErr);
+        else console.log('✓ Added rating_value column to entries');
       });
     }
     const hasVideoFilename = Array.isArray(cols) && cols.some((col) => col.name === 'video_filename');
@@ -1042,6 +1050,15 @@ function normalizeLocationText(value) {
   return normalized.slice(0, 120);
 }
 
+function normalizeRatingValue(value) {
+  const raw = String(value == null ? '' : value).trim();
+  if (!raw) return null;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed)) return null;
+  const clamped = Math.min(10, Math.max(0, parsed));
+  return Math.round(clamped * 10) / 10;
+}
+
 async function getOrCreateCollectionId(userId, collectionName) {
   const normalized = normalizeCollectionName(collectionName);
   if (!normalized || !userId) return null;
@@ -1373,6 +1390,7 @@ app.post('/upload', ensureAuth, uploadPostMedia, verifyCsrfToken, async (req, re
   const tagsInput = req.body.tags || '';
   const authorLabel = normalizeAuthorLabel(req.body.authorLabel || '');
   const locationText = normalizeLocationText(req.body.location || '');
+  const ratingValue = normalizeRatingValue(req.body.rating);
   const collectionName = req.body.collection || '';
   const saveAsDraft = String(req.body.saveAsDraft || '').trim() === '1' || req.body.saveAsDraft === 'on';
   const photoFiles = getUploadFieldFiles(req, 'photos');
@@ -1415,9 +1433,9 @@ app.post('/upload', ensureAuth, uploadPostMedia, verifyCsrfToken, async (req, re
     const insertResult = await dbRunAsync(
       `INSERT INTO entries(
         filename, originalname, video_filename, video_originalname, video_mimetype,
-        video_poster_filename, video_poster_originalname, note, author_label, location_text,
+        video_poster_filename, video_poster_originalname, note, author_label, location_text, rating_value,
         is_pinned, created_at, user_id, is_draft, collection_id
-      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       [
         first ? first.key : null,
         first ? first.originalname : null,
@@ -1429,6 +1447,7 @@ app.post('/upload', ensureAuth, uploadPostMedia, verifyCsrfToken, async (req, re
         note,
         authorLabel || null,
         locationText || null,
+        ratingValue,
         0,
         createdAt,
         req.session.userId,
@@ -1571,6 +1590,7 @@ app.post('/entries/:id/edit', ensureOwnerOrAdmin, uploadPostMedia, verifyCsrfTok
   const tagsInput = req.body.tags || '';
   const authorLabel = normalizeAuthorLabel(req.body.authorLabel || '');
   const locationText = normalizeLocationText(req.body.location || '');
+  const ratingValue = normalizeRatingValue(req.body.rating);
   const collectionName = req.body.collection || '';
   const saveAsDraft = String(req.body.saveAsDraft || '').trim() === '1' || req.body.saveAsDraft === 'on';
   const removeAllPhotos = req.body.removeAllPhotos === 'on';
@@ -1604,6 +1624,7 @@ app.post('/entries/:id/edit', ensureOwnerOrAdmin, uploadPostMedia, verifyCsrfTok
           tagText: String(tagsInput || ''),
           author_label: authorLabel,
           location_text: locationText,
+          rating_value: ratingValue,
           collection_name: normalizeCollectionName(collectionName),
           is_draft: saveAsDraft ? 1 : 0
         },
@@ -1627,6 +1648,7 @@ app.post('/entries/:id/edit', ensureOwnerOrAdmin, uploadPostMedia, verifyCsrfTok
           tagText: String(tagsInput || ''),
           author_label: authorLabel,
           location_text: locationText,
+          rating_value: ratingValue,
           collection_name: normalizeCollectionName(collectionName),
           is_draft: saveAsDraft ? 1 : 0
         },
@@ -1721,7 +1743,7 @@ app.post('/entries/:id/edit', ensureOwnerOrAdmin, uploadPostMedia, verifyCsrfTok
     await dbRunAsync(
       `UPDATE entries
        SET filename = ?, originalname = ?, video_filename = ?, video_originalname = ?, video_mimetype = ?,
-           video_poster_filename = ?, video_poster_originalname = ?, note = ?, author_label = ?, location_text = ?, is_draft = ?, collection_id = ?, is_pinned = ?
+           video_poster_filename = ?, video_poster_originalname = ?, note = ?, author_label = ?, location_text = ?, rating_value = ?, is_draft = ?, collection_id = ?, is_pinned = ?
        WHERE id = ?`,
       [
         firstImage ? firstImage.filename : null,
@@ -1734,6 +1756,7 @@ app.post('/entries/:id/edit', ensureOwnerOrAdmin, uploadPostMedia, verifyCsrfTok
         note,
         authorLabel || null,
         locationText || null,
+        ratingValue,
         isDraft,
         collectionId,
         nextPinned,

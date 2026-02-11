@@ -81,6 +81,8 @@
         <textarea name="note" rows="4" placeholder="Update your note..."><%= entry.note || '' %></textarea>
         <label>Location</label>
         <input name="location" value="<%= entry.location_text || '' %>" placeholder="e.g. Tokyo Station, Home kitchen, Downtown LA" />
+        <label>Rating (0-10)</label>
+        <input type="number" name="rating" min="0" max="10" step="0.1" value="<%= entry.rating_value != null ? Number(entry.rating_value).toFixed(1) : '' %>" placeholder="e.g. 8.5" />
         <label>Tags (comma separated)</label>
         <input name="tags" value="<%= entry.tagText || '' %>" placeholder="spicy, sushi, weekend" />
         <label>Author</label>

@@ -13,6 +13,7 @@ Post features:
 - Edit and delete existing posts.
 - Optional per-post author label (for distinguishing multiple people sharing one account).
 - Optional per-post location text input.
+- Optional per-post rating input (0-10).
 - Pin/unpin posts (pinned posts stay at top for logged-in users).
 - Admin can grant non-admin users a separate pin permission.
 - Admin can reset password for any user (including admin self).

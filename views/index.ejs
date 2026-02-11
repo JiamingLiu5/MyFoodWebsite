@@ -154,6 +154,10 @@
             <label>Location</label>
             <input name="location" placeholder="e.g. Tokyo Station, Home kitchen, Downtown LA" />
           </div>
+          <div class="form-field">
+            <label>Rating (0-10)</label>
+            <input type="number" name="rating" min="0" max="10" step="0.1" placeholder="e.g. 8.5" />
+          </div>
           <div class="create-post-grid">
             <div class="form-field">
               <label>Author</label>
@@ -229,6 +233,9 @@
                 <% } %>
                 <% if (e.location_text) { %>
                   <div class="author-note">Location: <strong><%= e.location_text %></strong></div>
+                <% } %>
+                <% if (e.rating_value != null) { %>
+                  <div class="author-note">Rating: <strong><%= Number(e.rating_value).toFixed(1) %>/10</strong></div>
                 <% } %>
                 <div class="note"><%= e.note ? e.note : '(no note)' %></div>
                 <% if (e.tags && e.tags.length > 0) { %>

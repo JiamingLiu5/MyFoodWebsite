@@ -49,6 +49,9 @@
           <% if (entry.location_text) { %>
             <div class="author-note">Location: <strong><%= entry.location_text %></strong></div>
           <% } %>
+          <% if (entry.rating_value != null) { %>
+            <div class="author-note">Rating: <strong><%= Number(entry.rating_value).toFixed(1) %>/10</strong></div>
+          <% } %>
           <div class="note"><%= entry.note ? entry.note : '(no note)' %></div>
           <% if (entry.tags && entry.tags.length > 0) { %>
             <div class="tags-row">

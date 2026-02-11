@@ -247,25 +247,8 @@
         class="create-post-fab"
         href="/entries/new"
         aria-label="Create a new post"
-        style="position:fixed;right:18px;bottom:18px;z-index:99999;"
-      >+</a>
-      <script>
-        (function pinFabToViewport() {
-          var fab = document.querySelector('.create-post-fab');
-          if (!fab) return;
-          function applyPinnedPosition() {
-            fab.style.setProperty('position', 'fixed', 'important');
-            fab.style.setProperty('right', '18px', 'important');
-            fab.style.setProperty('bottom', '18px', 'important');
-            fab.style.setProperty('left', 'auto', 'important');
-            fab.style.setProperty('top', 'auto', 'important');
-            fab.style.setProperty('z-index', '99999', 'important');
-          }
-          applyPinnedPosition();
-          window.addEventListener('scroll', applyPinnedPosition, { passive: true });
-          window.addEventListener('resize', applyPinnedPosition);
-        })();
-      </script>
+        title="Create Post"
+      ><span aria-hidden="true">+</span></a>
     <% } %>
     <script src="/static/script.js"></script>
   </body>

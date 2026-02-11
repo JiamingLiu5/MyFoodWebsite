@@ -152,9 +152,9 @@
                   </div>
                   <div class="comment-body"><%= comment.body %></div>
                   <% if (userId && (comment.user_id === userId || userRole === 'admin')) { %>
-                    <form class="inline-form" action="/comments/<%= comment.id %>/delete" method="post" onsubmit="return confirm('Delete this comment?')">
+                    <form class="inline-form comment-delete-form" action="/comments/<%= comment.id %>/delete" method="post" onsubmit="return confirm('Delete this comment?')">
                       <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
-                      <button class="delete-btn" type="submit">Delete Comment</button>
+                      <button class="delete-btn comment-delete-btn" type="submit" aria-label="Delete comment" title="Delete comment">🗑️</button>
                     </form>
                   <% } %>
                 </article>

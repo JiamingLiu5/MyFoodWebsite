@@ -235,6 +235,62 @@
                     <% } %>
                   <% } %>
                 </div>
+
+                <% if (!isDeleted) { %>
+                  <section class="entry section-card">
+                    <h3 class="brand-subtitle">Quick Reactions</h3>
+                    <div class="entry-actions">
+                      <% (reactionOptions || []).forEach(function(option) { %>
+                        <form class="inline-form reaction-form" action="/entries/<%= e.id %>/reactions" method="post" data-reaction="<%= option.value %>" data-reaction-label="<%= option.label %>" data-show-count="<%= canSeeTotals ? '1' : '0' %>">
+                          <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
+                          <input type="hidden" name="reaction" value="<%= option.value %>" />
+                          <input type="hidden" name="returnTo" value="/<%= currentFilterQuery %>" />
+                          <button class="<%= e.reactions && e.reactions.mine === option.value ? 'pin-btn' : 'view-btn' %>" type="submit">
+                            <%= option.label %><%= canSeeTotals ? ' (' + ((e.reactions && e.reactions.counts && e.reactions.counts[option.value]) || 0) + ')' : '' %>
+                          </button>
+                        </form>
+                      <% }) %>
+                    </div>
+                  </section>
+
+                  <section class="entry section-card">
+                    <h3 class="brand-subtitle">Comments<%= canSeeTotals ? ' (' + (e.visibleCommentCount || 0) + ')' : '' %></h3>
+                    <% if (userId) { %>
+                      <form class="upload-form comment-form" action="/entries/<%= e.id %>/comments" method="post">
+                        <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
+                        <input type="hidden" name="returnTo" value="/<%= currentFilterQuery %>" />
+                        <label>Add comment</label>
+                        <textarea name="body" rows="2" maxlength="500" required placeholder="Share your thoughts..."></textarea>
+                        <button type="submit">Post Comment</button>
+                      </form>
+                    <% } else { %>
+                      <p class="status-note"><a href="/login">Login</a> to comment and react.</p>
+                    <% } %>
+
+                    <% const visibleComments = e.commentsPreview || []; %>
+                    <% if (visibleComments.length === 0) { %>
+                      <p class="pinned-only-note">No comments yet.</p>
+                    <% } else { %>
+                      <div class="comments-list">
+                        <% visibleComments.forEach(function(comment) { %>
+                          <article class="comment-item">
+                            <div class="comment-meta">
+                              <strong><%= comment.username || 'Unknown user' %></strong>
+                              <span><%= new Date(comment.created_at).toLocaleString() %></span>
+                            </div>
+                            <div class="comment-body"><%= comment.body %></div>
+                            <% if (userId && (comment.user_id === userId || userRole === 'admin')) { %>
+                              <form class="inline-form" action="/comments/<%= comment.id %>/delete" method="post" onsubmit="return confirm('Delete this comment?')">
+                                <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
+                                <button class="delete-btn" type="submit">Delete Comment</button>
+                              </form>
+                            <% } %>
+                          </article>
+                        <% }) %>
+                      </div>
+                    <% } %>
+                  </section>
+                <% } %>
               </div>
             </article>
           <% }) %>

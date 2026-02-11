@@ -114,11 +114,12 @@
           <h3 class="brand-subtitle">Quick Reactions</h3>
           <div class="entry-actions">
             <% (reactionOptions || []).forEach(function(option) { %>
-              <form class="inline-form reaction-form" action="/entries/<%= entry.id %>/reactions" method="post" data-reaction="<%= option.value %>" data-reaction-label="<%= option.label %>">
+              <form class="inline-form reaction-form" action="/entries/<%= entry.id %>/reactions" method="post" data-reaction="<%= option.value %>" data-reaction-label="<%= option.label %>" data-show-count="<%= canSeeTotals ? '1' : '0' %>">
                 <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
                 <input type="hidden" name="reaction" value="<%= option.value %>" />
+                <input type="hidden" name="returnTo" value="/entries/<%= entry.id %>" />
                 <button class="<%= reactions.mine === option.value ? 'pin-btn' : 'view-btn' %>" type="submit">
-                  <%= option.label %> (<%= reactions.counts[option.value] || 0 %>)
+                  <%= option.label %><%= canSeeTotals ? ' (' + (reactions.counts[option.value] || 0) + ')' : '' %>
                 </button>
               </form>
             <% }) %>
@@ -126,10 +127,11 @@
         </section>
 
         <section class="entry section-card">
-          <h3 class="brand-subtitle">Comments (<%= comments.length %>)</h3>
+          <h3 class="brand-subtitle">Comments<%= canSeeTotals ? ' (' + comments.length + ')' : '' %></h3>
           <% if (userId) { %>
             <form class="upload-form comment-form" action="/entries/<%= entry.id %>/comments" method="post">
               <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
+              <input type="hidden" name="returnTo" value="/entries/<%= entry.id %>" />
               <label>Add comment</label>
               <textarea name="body" rows="3" maxlength="500" required placeholder="Share your thoughts..."></textarea>
               <button type="submit">Post Comment</button>

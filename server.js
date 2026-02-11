@@ -1139,15 +1139,74 @@ function canEditEntry(row, req) {
   return isAdmin || isOwner;
 }
 
-async function getEntryComments(entryId) {
+function getCommentVisibilityClause(viewerUserId, viewerRole, entryAlias = 'c', userAlias = 'u') {
+  if (viewerRole === 'admin') return { sql: '1=1', params: [] };
+  if (viewerUserId) {
+    return {
+      sql: `(${userAlias}.role = ? OR ${entryAlias}.user_id = ?)`,
+      params: ['admin', viewerUserId]
+    };
+  }
+  return { sql: `${userAlias}.role = ?`, params: ['admin'] };
+}
+
+async function getEntryComments(entryId, viewerUserId, viewerRole) {
+  const visibility = getCommentVisibilityClause(viewerUserId, viewerRole, 'c', 'u');
   return dbAllAsync(
-    `SELECT c.id, c.entry_id, c.user_id, c.body, c.created_at, u.username
+    `SELECT c.id, c.entry_id, c.user_id, c.body, c.created_at, u.username, u.role AS user_role
      FROM comments c
      LEFT JOIN users u ON u.id = c.user_id
      WHERE c.entry_id = ?
+       AND ${visibility.sql}
      ORDER BY c.created_at ASC`,
-    [entryId]
+    [entryId, ...visibility.params]
   );
+}
+
+async function getEntryCommentsMap(entryIds, viewerUserId, viewerRole, limitPerEntry = 3) {
+  const map = {};
+  if (!Array.isArray(entryIds) || entryIds.length === 0) return map;
+  const placeholders = entryIds.map(() => '?').join(',');
+  const visibility = getCommentVisibilityClause(viewerUserId, viewerRole, 'c', 'u');
+  const rows = await dbAllAsync(
+    `SELECT c.id, c.entry_id, c.user_id, c.body, c.created_at, u.username, u.role AS user_role
+     FROM comments c
+     LEFT JOIN users u ON u.id = c.user_id
+     WHERE c.entry_id IN (${placeholders})
+       AND ${visibility.sql}
+     ORDER BY c.entry_id ASC, c.created_at DESC`,
+    [...entryIds, ...visibility.params]
+  );
+  for (const row of rows) {
+    if (!map[row.entry_id]) map[row.entry_id] = [];
+    if (limitPerEntry == null || map[row.entry_id].length < limitPerEntry) {
+      map[row.entry_id].push(row);
+    }
+  }
+  for (const key of Object.keys(map)) {
+    map[key].reverse();
+  }
+  return map;
+}
+
+async function getVisibleCommentCountsMap(entryIds, viewerUserId, viewerRole) {
+  const map = {};
+  if (!Array.isArray(entryIds) || entryIds.length === 0) return map;
+  const placeholders = entryIds.map(() => '?').join(',');
+  const visibility = getCommentVisibilityClause(viewerUserId, viewerRole, 'c', 'u');
+  const rows = await dbAllAsync(
+    `SELECT c.entry_id, COUNT(*) AS c
+     FROM comments c
+     LEFT JOIN users u ON u.id = c.user_id
+     WHERE c.entry_id IN (${placeholders})
+       AND ${visibility.sql}
+     GROUP BY c.entry_id`,
+    [...entryIds, ...visibility.params]
+  );
+  for (const row of rows) {
+    map[row.entry_id] = Number(row.c || 0);
+  }
+  return map;
 }
 
 const REACTION_OPTIONS = [
@@ -1158,27 +1217,93 @@ const REACTION_OPTIONS = [
 ];
 const SUPPORTED_REACTIONS = REACTION_OPTIONS.map((option) => option.value);
 
-async function getEntryReactions(entryId, userId) {
+function getReactionVisibilityClause(viewerUserId, viewerRole, reactionAlias = 'r', userAlias = 'u') {
+  if (viewerRole === 'admin') return { sql: '1=1', params: [] };
+  if (viewerUserId) {
+    return {
+      sql: `(${userAlias}.role = ? OR ${reactionAlias}.user_id = ?)`,
+      params: ['admin', viewerUserId]
+    };
+  }
+  return { sql: `${userAlias}.role = ?`, params: ['admin'] };
+}
+
+async function getEntryReactions(entryId, viewerUserId, viewerRole) {
+  const visibility = getReactionVisibilityClause(viewerUserId, viewerRole, 'r', 'u');
   const rows = await dbAllAsync(
-    `SELECT reaction, COUNT(*) AS c
-     FROM entry_reactions
-     WHERE entry_id = ?
-     GROUP BY reaction`,
-    [entryId]
+    `SELECT r.reaction, COUNT(*) AS c
+     FROM entry_reactions r
+     LEFT JOIN users u ON u.id = r.user_id
+     WHERE r.entry_id = ?
+       AND ${visibility.sql}
+     GROUP BY r.reaction`,
+    [entryId, ...visibility.params]
   );
   const counts = Object.fromEntries(SUPPORTED_REACTIONS.map((reaction) => [reaction, 0]));
   for (const row of rows) {
     if (counts[row.reaction] !== undefined) counts[row.reaction] = row.c;
   }
   let mine = null;
-  if (userId) {
+  if (viewerUserId) {
     const row = await dbGetAsync(
       'SELECT reaction FROM entry_reactions WHERE entry_id = ? AND user_id = ?',
-      [entryId, userId]
+      [entryId, viewerUserId]
     );
     mine = row ? row.reaction : null;
   }
   return { counts, mine };
+}
+
+async function getEntryReactionsMap(entryIds, viewerUserId, viewerRole) {
+  const map = {};
+  if (!Array.isArray(entryIds) || entryIds.length === 0) return map;
+  const placeholders = entryIds.map(() => '?').join(',');
+  const visibility = getReactionVisibilityClause(viewerUserId, viewerRole, 'r', 'u');
+  const rows = await dbAllAsync(
+    `SELECT r.entry_id, r.reaction, COUNT(*) AS c
+     FROM entry_reactions r
+     LEFT JOIN users u ON u.id = r.user_id
+     WHERE r.entry_id IN (${placeholders})
+       AND ${visibility.sql}
+     GROUP BY r.entry_id, r.reaction`,
+    [...entryIds, ...visibility.params]
+  );
+  for (const entryId of entryIds) {
+    map[entryId] = {
+      counts: Object.fromEntries(SUPPORTED_REACTIONS.map((reaction) => [reaction, 0])),
+      mine: null
+    };
+  }
+  for (const row of rows) {
+    if (!map[row.entry_id]) {
+      map[row.entry_id] = {
+        counts: Object.fromEntries(SUPPORTED_REACTIONS.map((reaction) => [reaction, 0])),
+        mine: null
+      };
+    }
+    if (map[row.entry_id].counts[row.reaction] !== undefined) {
+      map[row.entry_id].counts[row.reaction] = Number(row.c || 0);
+    }
+  }
+  if (viewerUserId) {
+    const myRows = await dbAllAsync(
+      `SELECT entry_id, reaction
+       FROM entry_reactions
+       WHERE user_id = ?
+         AND entry_id IN (${placeholders})`,
+      [viewerUserId, ...entryIds]
+    );
+    for (const row of myRows) {
+      if (!map[row.entry_id]) {
+        map[row.entry_id] = {
+          counts: Object.fromEntries(SUPPORTED_REACTIONS.map((reaction) => [reaction, 0])),
+          mine: null
+        };
+      }
+      map[row.entry_id].mine = row.reaction || null;
+    }
+  }
+  return map;
 }
 
 async function appendAuditLog(req, action, targetType, targetId, meta = null) {
@@ -1340,10 +1465,24 @@ app.get('/', async (req, res) => {
       getEntryImagesMap(ids, entriesById),
       getEntryTagsMap(ids)
     ]);
-    const entries = rows.map((row) => ({
+    const entriesBase = rows.map((row) => ({
       ...row,
       images: imagesMap[row.id] || [],
       tags: tagsMap[row.id] || []
+    }));
+    const [commentsMap, commentCountsMap, reactionsMap] = await Promise.all([
+      getEntryCommentsMap(ids, userId, req.userRole, 3),
+      getVisibleCommentCountsMap(ids, userId, req.userRole),
+      getEntryReactionsMap(ids, userId, req.userRole)
+    ]);
+    const entries = entriesBase.map((row) => ({
+      ...row,
+      commentsPreview: commentsMap[row.id] || [],
+      visibleCommentCount: Number(commentCountsMap[row.id] || 0),
+      reactions: reactionsMap[row.id] || {
+        counts: Object.fromEntries(SUPPORTED_REACTIONS.map((reaction) => [reaction, 0])),
+        mine: null
+      }
     }));
     const tagShortcutSet = new Set();
     for (const entry of entries) {
@@ -1383,6 +1522,8 @@ app.get('/', async (req, res) => {
       tagShortcuts,
       filterCollections,
       userCollections,
+      canSeeTotals: req.userRole === 'admin',
+      reactionOptions: REACTION_OPTIONS,
       currentFilterQuery: buildFilterQueryString(filters)
     });
   } catch (err) {
@@ -1529,8 +1670,8 @@ app.get('/entries/:id', async (req, res) => {
     const [images, tags, comments, reactions] = await Promise.all([
       getEntryImagesForEntry(entryId, row),
       getEntryTags(entryId),
-      getEntryComments(entryId),
-      getEntryReactions(entryId, req.session.userId)
+      getEntryComments(entryId, req.session.userId, req.userRole),
+      getEntryReactions(entryId, req.session.userId, req.userRole)
     ]);
     res.render('entry', {
       entry: { ...row, images, tags, isDeleted },
@@ -1541,7 +1682,8 @@ app.get('/entries/:id', async (req, res) => {
       reactions,
       comments,
       supportedReactions: SUPPORTED_REACTIONS,
-      reactionOptions: REACTION_OPTIONS
+      reactionOptions: REACTION_OPTIONS,
+      canSeeTotals: req.userRole === 'admin'
     });
   } catch (err) {
     console.error(err);
@@ -1879,8 +2021,10 @@ app.post('/entries/:id/restore', ensureOwnerOrAdmin, verifyCsrfToken, async (req
 app.post('/entries/:id/comments', ensureAuth, verifyCsrfToken, async (req, res) => {
   const entryId = Number.parseInt(req.params.id, 10);
   if (!Number.isInteger(entryId) || entryId <= 0) return res.status(400).send('Invalid entry id');
+  const returnToRaw = typeof req.body.returnTo === 'string' ? req.body.returnTo.trim() : '';
+  const returnTo = (returnToRaw === '/' || returnToRaw.startsWith('/?') || returnToRaw.startsWith('/entries/')) ? returnToRaw : `/entries/${entryId}`;
   const body = String(req.body.body || '').trim();
-  if (!body) return res.redirect(`/entries/${entryId}`);
+  if (!body) return res.redirect(returnTo);
   if (body.length > 500) return res.status(400).send('Comment is too long (max 500 characters).');
 
   try {
@@ -1892,7 +2036,7 @@ app.post('/entries/:id/comments', ensureAuth, verifyCsrfToken, async (req, res) 
       [entryId, req.session.userId, body, Date.now()]
     );
     await appendAuditLog(req, 'comment.create', 'entry', entryId, null);
-    res.redirect(`/entries/${entryId}`);
+    res.redirect(returnTo);
   } catch (err) {
     console.error(err);
     res.status(500).send('Comment error');
@@ -1911,6 +2055,8 @@ app.post('/entries/:id/reactions', ensureAuth, verifyCsrfToken, async (req, res)
 
   const entryId = Number.parseInt(req.params.id, 10);
   if (!Number.isInteger(entryId) || entryId <= 0) return sendError(400, 'Invalid entry id');
+  const returnToRaw = typeof req.body.returnTo === 'string' ? req.body.returnTo.trim() : '';
+  const returnTo = (returnToRaw === '/' || returnToRaw.startsWith('/?') || returnToRaw.startsWith('/entries/')) ? returnToRaw : `/entries/${entryId}`;
   const reaction = String(req.body.reaction || '').trim().toLowerCase();
   if (!SUPPORTED_REACTIONS.includes(reaction)) return sendError(400, 'Unsupported reaction');
 
@@ -1937,14 +2083,14 @@ app.post('/entries/:id/reactions', ensureAuth, verifyCsrfToken, async (req, res)
       );
       await appendAuditLog(req, 'reaction.set', 'entry', entryId, { reaction });
     }
-    const latestReactions = await getEntryReactions(entryId, req.session.userId);
+    const latestReactions = await getEntryReactions(entryId, req.session.userId, req.userRole);
     if (expectsJson) {
       return res.json({
         ok: true,
         reactions: latestReactions
       });
     }
-    return res.redirect(`/entries/${entryId}`);
+    return res.redirect(returnTo);
   } catch (err) {
     console.error(err);
     if (expectsJson) return res.status(500).json({ ok: false, error: 'Reaction error' });

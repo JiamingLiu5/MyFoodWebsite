@@ -1150,7 +1150,13 @@ async function getEntryComments(entryId) {
   );
 }
 
-const SUPPORTED_REACTIONS = ['like', 'love', 'yum'];
+const REACTION_OPTIONS = [
+  { value: 'thumb_up', label: 'Thumb Up 👍' },
+  { value: 'thumb_down', label: 'Thumb Down 👎' },
+  { value: 'excited', label: 'Excited 🤩' },
+  { value: 'drooling', label: 'Drooling 🤤' }
+];
+const SUPPORTED_REACTIONS = REACTION_OPTIONS.map((option) => option.value);
 
 async function getEntryReactions(entryId, userId) {
   const rows = await dbAllAsync(
@@ -1534,7 +1540,8 @@ app.get('/entries/:id', async (req, res) => {
       canEdit,
       reactions,
       comments,
-      supportedReactions: SUPPORTED_REACTIONS
+      supportedReactions: SUPPORTED_REACTIONS,
+      reactionOptions: REACTION_OPTIONS
     });
   } catch (err) {
     console.error(err);

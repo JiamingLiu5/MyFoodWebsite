@@ -111,14 +111,14 @@
 
       <% if (!entry.isDeleted) { %>
         <section class="entry section-card">
-          <h3 class="brand-subtitle">Reactions</h3>
+          <h3 class="brand-subtitle">Quick Reactions</h3>
           <div class="entry-actions">
-            <% supportedReactions.forEach(function(reaction) { %>
-              <form class="inline-form reaction-form" action="/entries/<%= entry.id %>/reactions" method="post" data-reaction="<%= reaction %>">
+            <% (reactionOptions || []).forEach(function(option) { %>
+              <form class="inline-form reaction-form" action="/entries/<%= entry.id %>/reactions" method="post" data-reaction="<%= option.value %>" data-reaction-label="<%= option.label %>">
                 <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
-                <input type="hidden" name="reaction" value="<%= reaction %>" />
-                <button class="<%= reactions.mine === reaction ? 'pin-btn' : 'view-btn' %>" type="submit">
-                  <%= reaction %> (<%= reactions.counts[reaction] || 0 %>)
+                <input type="hidden" name="reaction" value="<%= option.value %>" />
+                <button class="<%= reactions.mine === option.value ? 'pin-btn' : 'view-btn' %>" type="submit">
+                  <%= option.label %> (<%= reactions.counts[option.value] || 0 %>)
                 </button>
               </form>
             <% }) %>

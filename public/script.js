@@ -823,7 +823,8 @@ document.addEventListener('DOMContentLoaded', () => {
         const button = form.querySelector('button[type="submit"]');
         if (!reaction || !button) return;
         const count = Number(counts[reaction] || 0);
-        button.textContent = `${reaction} (${count})`;
+        const reactionLabel = String(form.getAttribute('data-reaction-label') || reaction).trim();
+        button.textContent = `${reactionLabel} (${count})`;
         button.className = mine === reaction ? 'pin-btn' : 'view-btn';
         button.setAttribute('aria-pressed', mine === reaction ? 'true' : 'false');
       });

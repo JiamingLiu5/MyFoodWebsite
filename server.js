@@ -1471,7 +1471,7 @@ app.get('/', async (req, res) => {
       tags: tagsMap[row.id] || []
     }));
     const [commentsMap, commentCountsMap, reactionsMap] = await Promise.all([
-      getEntryCommentsMap(ids, userId, req.userRole, 3),
+      getEntryCommentsMap(ids, userId, req.userRole, 2),
       getVisibleCommentCountsMap(ids, userId, req.userRole),
       getEntryReactionsMap(ids, userId, req.userRole)
     ]);

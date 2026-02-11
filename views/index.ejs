@@ -250,43 +250,44 @@
                           </button>
                         </form>
                       <% }) %>
+                      <% if (userId) { %>
+                        <details class="comment-composer">
+                          <summary class="view-btn">Comment</summary>
+                          <form class="upload-form comment-form compact" action="/entries/<%= e.id %>/comments" method="post">
+                            <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
+                            <input type="hidden" name="returnTo" value="/<%= currentFilterQuery %>" />
+                            <textarea name="body" rows="1" maxlength="500" required placeholder="Write a comment..."></textarea>
+                            <button type="submit">Post</button>
+                          </form>
+                        </details>
+                      <% } else { %>
+                        <a class="view-btn" href="/login">Comment</a>
+                      <% } %>
                     </div>
-                  </section>
-
-                  <section class="entry section-card">
-                    <h3 class="brand-subtitle">Comments<%= canSeeTotals ? ' (' + (e.visibleCommentCount || 0) + ')' : '' %></h3>
-                    <% if (userId) { %>
-                      <form class="upload-form comment-form" action="/entries/<%= e.id %>/comments" method="post">
-                        <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
-                        <input type="hidden" name="returnTo" value="/<%= currentFilterQuery %>" />
-                        <label>Add comment</label>
-                        <textarea name="body" rows="2" maxlength="500" required placeholder="Share your thoughts..."></textarea>
-                        <button type="submit">Post Comment</button>
-                      </form>
-                    <% } else { %>
-                      <p class="status-note"><a href="/login">Login</a> to comment and react.</p>
-                    <% } %>
 
                     <% const visibleComments = e.commentsPreview || []; %>
-                    <% if (visibleComments.length === 0) { %>
-                      <p class="pinned-only-note">No comments yet.</p>
-                    <% } else { %>
-                      <div class="comments-list">
+                    <% if (visibleComments.length > 0) { %>
+                      <div class="comments-list compact">
                         <% visibleComments.forEach(function(comment) { %>
-                          <article class="comment-item">
+                          <article class="comment-item compact">
                             <div class="comment-meta">
                               <strong><%= comment.username || 'Unknown user' %></strong>
-                              <span><%= new Date(comment.created_at).toLocaleString() %></span>
+                              <% if (canSeeTotals) { %>
+                                <span><%= new Date(comment.created_at).toLocaleString() %></span>
+                              <% } %>
                             </div>
                             <div class="comment-body"><%= comment.body %></div>
                             <% if (userId && (comment.user_id === userId || userRole === 'admin')) { %>
                               <form class="inline-form" action="/comments/<%= comment.id %>/delete" method="post" onsubmit="return confirm('Delete this comment?')">
                                 <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
-                                <button class="delete-btn" type="submit">Delete Comment</button>
+                                <button class="delete-btn" type="submit">Delete</button>
                               </form>
                             <% } %>
                           </article>
                         <% }) %>
+                        <% if (canSeeTotals && (e.visibleCommentCount || 0) > visibleComments.length) { %>
+                          <a class="view-btn" href="/entries/<%= e.id %>">View all comments (<%= e.visibleCommentCount %>)</a>
+                        <% } %>
                       </div>
                     <% } %>
                   </section>

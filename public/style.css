@@ -923,6 +923,43 @@ body.enable-reveal .entry.is-visible{opacity:1;transform:translateY(0) scale(1)}
   white-space:pre-wrap;
   word-break:break-word;
 }
+.comment-composer{
+  display:inline-block;
+}
+.comment-composer > summary{
+  list-style:none;
+  cursor:pointer;
+}
+.comment-composer > summary::-webkit-details-marker{display:none}
+.comment-form.compact{
+  margin-top:8px;
+  margin-bottom:0;
+  padding:8px;
+  gap:6px;
+  border-radius:10px;
+}
+.comment-form.compact textarea{
+  min-height:40px;
+}
+.comment-form.compact button{
+  width:100px;
+  padding:8px 10px;
+}
+.comments-list.compact{
+  gap:6px;
+  margin-top:8px;
+}
+.comment-item.compact{
+  padding:8px;
+  border-radius:8px;
+}
+.comment-item.compact .comment-meta{
+  font-size:11px;
+}
+.comment-item.compact .comment-body{
+  margin-top:4px;
+  font-size:13px;
+}
 .audit-meta-cell{
   max-width:360px;
   overflow-wrap:anywhere;

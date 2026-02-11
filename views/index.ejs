@@ -243,7 +243,12 @@
 
     </div>
     <% if (userId) { %>
-      <a class="create-post-fab" href="/entries/new" aria-label="Create a new post">+</a>
+      <a
+        class="create-post-fab"
+        href="/entries/new"
+        aria-label="Create a new post"
+        style="position:fixed;right:18px;bottom:18px;z-index:99999;"
+      >+</a>
     <% } %>
     <script src="/static/script.js"></script>
   </body>

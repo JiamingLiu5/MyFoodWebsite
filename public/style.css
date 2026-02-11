@@ -233,11 +233,14 @@ body.has-create-fab .container{
   padding-bottom:calc(110px + env(safe-area-inset-bottom));
 }
 .create-post-fab{
-  position:fixed;
+  position:absolute;
+  top:0;
   right:18px;
-  bottom:calc(18px + env(safe-area-inset-bottom));
+  bottom:auto;
   z-index:2000;
   text-decoration:none;
+  transform:translate3d(0, 0, 0);
+  will-change:transform;
 }
 .create-post-fab.sidebar-fold-toggle{
   min-width:42px;

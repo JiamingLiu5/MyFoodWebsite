@@ -286,9 +286,25 @@ document.addEventListener('DOMContentLoaded', () => {
   let sidebarCurrentY = window.scrollY + SIDEBAR_FOLLOW_OFFSET;
   let sidebarTargetY = sidebarCurrentY;
   let sidebarFollowRafId = 0;
+  const postFab = document.querySelector('.create-post-fab');
+  const POST_FAB_FOLLOW_BOTTOM_OFFSET = 18;
+  let postFabCurrentY = 0;
+  let postFabTargetY = 0;
+  let postFabFollowRafId = 0;
+  let postFabHeight = postFab ? Math.max(0, Math.round(postFab.getBoundingClientRect().height || 0)) : 0;
+
+  function getPostFabRightOffset() {
+    return window.matchMedia('(max-width:700px)').matches ? 14 : 18;
+  }
 
   function applySidebarOffset(y) {
     actionSidebar.style.transform = `translate3d(0, ${Math.round(y)}px, 0)`;
+  }
+
+  function applyPostFabOffset(y) {
+    if (!postFab) return;
+    postFab.style.right = `${getPostFabRightOffset()}px`;
+    postFab.style.transform = `translate3d(0, ${Math.round(y)}px, 0)`;
   }
 
   function animateSidebarFollow() {
@@ -304,6 +320,20 @@ document.addEventListener('DOMContentLoaded', () => {
     sidebarFollowRafId = window.requestAnimationFrame(animateSidebarFollow);
   }
 
+  function animatePostFabFollow() {
+    if (!postFab) return;
+    const delta = postFabTargetY - postFabCurrentY;
+    if (Math.abs(delta) < 0.2) {
+      postFabCurrentY = postFabTargetY;
+      applyPostFabOffset(postFabCurrentY);
+      postFabFollowRafId = 0;
+      return;
+    }
+    postFabCurrentY += delta * 0.22;
+    applyPostFabOffset(postFabCurrentY);
+    postFabFollowRafId = window.requestAnimationFrame(animatePostFabFollow);
+  }
+
   function queueSidebarFollow() {
     sidebarTargetY = window.scrollY + SIDEBAR_FOLLOW_OFFSET;
     if (!sidebarFollowRafId) {
@@ -311,9 +341,25 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
+  function queuePostFabFollow() {
+    if (!postFab) return;
+    postFabHeight = Math.max(postFabHeight, Math.round(postFab.getBoundingClientRect().height || 0));
+    postFabTargetY = window.scrollY + window.innerHeight - POST_FAB_FOLLOW_BOTTOM_OFFSET - postFabHeight;
+    if (!postFabFollowRafId) {
+      postFabFollowRafId = window.requestAnimationFrame(animatePostFabFollow);
+    }
+  }
+
   applySidebarOffset(sidebarCurrentY);
+  if (postFab) {
+    postFabCurrentY = window.scrollY + window.innerHeight - POST_FAB_FOLLOW_BOTTOM_OFFSET - postFabHeight;
+    postFabTargetY = postFabCurrentY;
+    applyPostFabOffset(postFabCurrentY);
+  }
   window.addEventListener('scroll', queueSidebarFollow, { passive: true });
   window.addEventListener('resize', queueSidebarFollow);
+  window.addEventListener('scroll', queuePostFabFollow, { passive: true });
+  window.addEventListener('resize', queuePostFabFollow);
 
   const entries = Array.from(document.querySelectorAll('.entry'));
   if (entries.length) {

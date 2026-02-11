@@ -800,21 +800,31 @@ document.addEventListener('DOMContentLoaded', () => {
     const reactionForms = Array.from(document.querySelectorAll('form.reaction-form'));
     if (!reactionForms.length || !window.fetch || !window.FormData) return;
 
-    let reactionBusy = false;
+    function getReactionEntryId(form) {
+      if (!form) return '';
+      const explicit = String(form.getAttribute('data-entry-id') || '').trim();
+      if (explicit) return explicit;
+      const action = String(form.getAttribute('action') || '');
+      const match = action.match(/\/entries\/(\d+)\/reactions/i);
+      return match ? match[1] : '';
+    }
 
-    function setReactionBusy(isBusy) {
-      reactionBusy = isBusy;
-      reactionForms.forEach((form) => {
+    function getFormsForEntry(entryId) {
+      return reactionForms.filter((form) => getReactionEntryId(form) === entryId);
+    }
+
+    function setReactionBusy(entryId, isBusy) {
+      getFormsForEntry(entryId).forEach((form) => {
         const button = form.querySelector('button[type="submit"]');
         if (!button) return;
         button.disabled = isBusy;
       });
     }
 
-    function updateReactionButtons(reactionsState) {
+    function updateReactionButtons(reactionsState, entryId) {
       const counts = (reactionsState && reactionsState.counts) || {};
       const mine = reactionsState ? reactionsState.mine : null;
-      reactionForms.forEach((form) => {
+      getFormsForEntry(entryId).forEach((form) => {
         const reaction = String(
           form.getAttribute('data-reaction') ||
           (form.querySelector('input[name="reaction"]') && form.querySelector('input[name="reaction"]').value) ||
@@ -834,8 +844,14 @@ document.addEventListener('DOMContentLoaded', () => {
     reactionForms.forEach((form) => {
       form.addEventListener('submit', async (event) => {
         event.preventDefault();
-        if (reactionBusy) return;
-        setReactionBusy(true);
+        const entryId = getReactionEntryId(form);
+        if (!entryId) return;
+        const isBusy = getFormsForEntry(entryId).some((item) => {
+          const button = item.querySelector('button[type="submit"]');
+          return Boolean(button && button.disabled);
+        });
+        if (isBusy) return;
+        setReactionBusy(entryId, true);
 
         try {
           const payload = new URLSearchParams();
@@ -872,11 +888,11 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
           }
 
-          updateReactionButtons(responsePayload.reactions);
+          updateReactionButtons(responsePayload.reactions, entryId);
         } catch (err) {
           window.alert('Reaction request failed. Please try again.');
         } finally {
-          setReactionBusy(false);
+          setReactionBusy(entryId, false);
         }
       });
     });

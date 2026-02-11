@@ -936,23 +936,25 @@ body.enable-reveal .entry.is-visible{opacity:1;transform:translateY(0) scale(1)}
   display:inline-flex;
   align-items:center;
   justify-content:center;
-  min-height:34px;
-  padding:6px 12px;
-  border-radius:14px;
+  min-height:30px;
+  min-width:30px;
+  padding:4px 8px;
+  border-radius:12px;
   border:1px solid color-mix(in srgb, var(--line) 82%, #8f9ba8);
   background:color-mix(in srgb, var(--surface-strong) 74%, white);
   color:color-mix(in srgb, var(--text) 84%, #2f4154);
   text-decoration:none;
   font-weight:700;
+  font-size:15px;
   line-height:1;
 }
 .comment-bubble-btn::after{
   content:'';
   position:absolute;
-  right:10px;
-  bottom:-5px;
-  width:10px;
-  height:10px;
+  right:8px;
+  bottom:-4px;
+  width:8px;
+  height:8px;
   border-right:1px solid color-mix(in srgb, var(--line) 82%, #8f9ba8);
   border-bottom:1px solid color-mix(in srgb, var(--line) 82%, #8f9ba8);
   background:color-mix(in srgb, var(--surface-strong) 74%, white);

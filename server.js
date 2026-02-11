@@ -1308,6 +1308,16 @@ app.get('/', async (req, res) => {
       images: imagesMap[row.id] || [],
       tags: tagsMap[row.id] || []
     }));
+    const tagShortcutSet = new Set();
+    for (const entry of entries) {
+      if (!Array.isArray(entry.tags)) continue;
+      for (const tag of entry.tags) {
+        if (!tag) continue;
+        tagShortcutSet.add(String(tag));
+      }
+    }
+    if (filters.tag) tagShortcutSet.add(filters.tag);
+    const tagShortcuts = Array.from(tagShortcutSet).sort((a, b) => a.localeCompare(b));
     const userCollections = await getUserCollections(userId);
     const filterCollections = isAdmin
       ? await dbAllAsync(
@@ -1333,6 +1343,7 @@ app.get('/', async (req, res) => {
       maxVideoFileSizeMb: MAX_VIDEO_FILE_SIZE_MB,
       showPinnedOnly: !isAdmin,
       filters,
+      tagShortcuts,
       filterCollections,
       userCollections,
       currentFilterQuery: buildFilterQueryString(filters)

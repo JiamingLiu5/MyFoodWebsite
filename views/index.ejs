@@ -49,6 +49,21 @@
         <p class="status-note"><em>Viewing pinned published posts only. <a href="/login">Login</a> or <a href="/register">register</a> to create posts.</em></p>
       <% } %>
 
+      <% if (tagShortcuts && tagShortcuts.length > 0) { %>
+        <section class="tag-shortcuts" aria-label="Tag shortcuts">
+          <div class="shortcut-title">Quick Tag Access</div>
+          <div class="tag-shortcut-list">
+            <a class="tag-shortcut <%= !filters.tag ? 'is-active' : '' %>" href="/">All posts</a>
+            <% tagShortcuts.forEach(function(tag) { %>
+              <a
+                class="tag-shortcut <%= filters.tag === tag ? 'is-active' : '' %>"
+                href="/?tag=<%= encodeURIComponent(tag) %>"
+              >#<%= tag %></a>
+            <% }) %>
+          </div>
+        </section>
+      <% } %>
+
       <% const hasActiveFilters = Boolean(
         filters.q || filters.tag || filters.collection || filters.author || filters.from || filters.to ||
         (userId && ((filters.visibility && filters.visibility !== 'all') || filters.deleted === '1'))

@@ -229,6 +229,46 @@ a:hover{color:#0f5078}
 }
 
 .status-note{margin:0 0 12px;color:var(--muted);font-size:16px}
+.tag-shortcuts{
+  margin:0 0 12px;
+  padding:10px 12px;
+  border:1px solid var(--line);
+  border-radius:12px;
+  background:color-mix(in srgb, var(--surface) 84%, white);
+}
+.shortcut-title{
+  font-size:12px;
+  font-weight:800;
+  text-transform:uppercase;
+  letter-spacing:.06em;
+  color:var(--muted);
+  margin-bottom:8px;
+}
+.tag-shortcut-list{display:flex;flex-wrap:wrap;gap:8px}
+.tag-shortcut{
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  min-height:30px;
+  padding:4px 10px;
+  border-radius:999px;
+  border:1px solid color-mix(in srgb, var(--line) 78%, #8f9ba8);
+  background:color-mix(in srgb, var(--surface-strong) 70%, white);
+  color:color-mix(in srgb, var(--text) 84%, #2f4154);
+  text-decoration:none;
+  font-size:12px;
+  font-weight:800;
+}
+.tag-shortcut:hover{background:color-mix(in srgb, var(--secondary-soft) 62%, white);border-color:#92c6e8;color:var(--secondary)}
+.tag-shortcut:focus-visible{
+  outline:2px solid color-mix(in srgb, var(--secondary) 55%, white);
+  outline-offset:2px;
+}
+.tag-shortcut.is-active{
+  border-color:#92c6e8;
+  color:var(--secondary);
+  background:var(--secondary-soft);
+}
 
 .upload-form,
 .auth-form{

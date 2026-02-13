@@ -1,7 +1,7 @@
 FROM node:18-slim
 WORKDIR /app
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends ffmpeg \
+  && apt-get install -y --no-install-recommends ffmpeg ghostscript \
   && rm -rf /var/lib/apt/lists/*
 COPY package.json package-lock.json* ./
 RUN npm install --production

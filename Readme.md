@@ -76,6 +76,13 @@ Tools are now registered through a modular registry so you can add new tools wit
 docker compose up --build
 ```
 
+After image updates, rebuild so Ghostscript is included:
+
+```bash
+docker compose up -d --build
+docker compose exec web gs --version
+```
+
 Persistent paths:
 - uploads: `./uploads`
 - database: `./data/data.db`

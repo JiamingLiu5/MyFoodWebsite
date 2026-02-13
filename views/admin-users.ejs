@@ -12,7 +12,7 @@
       <header class="page-header">
         <div>
           <h1 class="brand-title">User Management</h1>
-          <p class="brand-subtitle">Manage user roles and permissions</p>
+          <p class="brand-subtitle">Select a user to view and edit permissions.</p>
         </div>
         <nav class="top-nav">
           <a href="/">Home</a>
@@ -36,30 +36,38 @@
         <% if (users.length === 0) { %>
           <p>No users found.</p>
         <% } else { %>
-          <table class="users-table">
+          <table class="users-table users-directory-table">
             <thead>
               <tr>
-                <th>ID</th>
-                <th>Username</th>
+                <th>User</th>
                 <th>Role</th>
                 <th>Pin Right</th>
-                <th>Tool Access</th>
+                <th>Tools</th>
                 <th>Last Login</th>
-                <th>Actions</th>
+                <th>Manage</th>
               </tr>
             </thead>
             <tbody>
               <% users.forEach(function(user) { %>
+                <% const isCurrentUser = Number(user.id) === Number(userId); %>
                 <% const hasPinRight = user.role === 'admin' || Number(user.can_pin || 0) === 1; %>
-                <% const hasExplicitPinRight = Number(user.can_pin || 0) === 1; %>
                 <% const toolAccess = user.toolAccess || {}; %>
+                <% const totalTools = Array.isArray(toolCatalog) ? toolCatalog.length : 0; %>
+                <% const enabledTools = user.role === 'admin'
+                  ? totalTools
+                  : (Array.isArray(toolCatalog)
+                    ? toolCatalog.reduce(function(count, tool) { return count + (toolAccess[tool.key] ? 1 : 0); }, 0)
+                    : 0);
+                %>
                 <tr>
-                  <td><%= user.id %></td>
                   <td>
-                    <%= user.username %>
-                    <% if (user.id === userId) { %>
-                      <span class="badge">(You)</span>
-                    <% } %>
+                    <div class="users-directory-user">
+                      <a class="users-directory-name users-directory-link" href="/admin/users/<%= user.id %>"><%= user.username %></a>
+                      <span class="badge">#<%= user.id %></span>
+                      <% if (isCurrentUser) { %>
+                        <span class="badge">(You)</span>
+                      <% } %>
+                    </div>
                   </td>
                   <td>
                     <span class="role-badge role-<%= user.role %>"><%= user.role %></span>
@@ -69,17 +77,13 @@
                       <%= hasPinRight ? 'Can Pin' : 'No Pin' %>
                     </span>
                   </td>
-                  <td class="tool-access-cell">
+                  <td>
                     <% if (user.role === 'admin') { %>
-                      <span class="info-text">All tools enabled for admins</span>
+                      <span class="info-text">All tools enabled</span>
                     <% } else if (!toolCatalog || toolCatalog.length === 0) { %>
                       <span class="info-text">No tools configured</span>
                     <% } else { %>
-                      <% toolCatalog.forEach(function(tool) { %>
-                        <span class="permission-badge <%= toolAccess[tool.key] ? 'permission-on' : 'permission-off' %>">
-                          <%= tool.name %>: <%= toolAccess[tool.key] ? 'On' : 'Off' %>
-                        </span>
-                      <% }) %>
+                      <span class="info-text"><%= enabledTools %> of <%= totalTools %> enabled</span>
                     <% } %>
                   </td>
                   <td>
@@ -89,54 +93,8 @@
                       <span class="info-text">Never</span>
                     <% } %>
                   </td>
-                  <td class="user-actions">
-                    <form class="inline-form reset-password-form" action="/admin/users/<%= user.id %>/reset-password" method="post">
-                      <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
-                      <input class="reset-password-input" type="password" name="newPassword" minlength="8" placeholder="New password (min 8)" required />
-                      <button class="reset-btn" type="submit" onclick="return confirm('Reset password for <%= user.username %>?')">Reset Password</button>
-                    </form>
-                    <% if (user.id !== userId) { %>
-                      <!-- Change role -->
-                      <form class="inline-form" action="/admin/users/<%= user.id %>/role" method="post">
-                        <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
-                        <input type="hidden" name="role" value="<%= user.role === 'admin' ? 'normal' : 'admin' %>" />
-                        <button class="role-btn" type="submit">
-                          <%= user.role === 'admin' ? 'Demote to Normal' : 'Promote to Admin' %>
-                        </button>
-                      </form>
-
-                      <% if (user.role !== 'admin') { %>
-                        <form class="inline-form" action="/admin/users/<%= user.id %>/pin-permission" method="post">
-                          <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
-                          <input type="hidden" name="canPin" value="<%= hasExplicitPinRight ? 0 : 1 %>" />
-                          <button class="perm-btn" type="submit">
-                            <%= hasExplicitPinRight ? 'Revoke Pin Right' : 'Grant Pin Right' %>
-                          </button>
-                        </form>
-                        <% if (toolCatalog && toolCatalog.length > 0) { %>
-                          <% toolCatalog.forEach(function(tool) { %>
-                            <form class="inline-form" action="/admin/users/<%= user.id %>/tool-access" method="post">
-                              <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
-                              <input type="hidden" name="toolKey" value="<%= tool.key %>" />
-                              <input type="hidden" name="granted" value="<%= toolAccess[tool.key] ? 0 : 1 %>" />
-                              <button class="perm-btn" type="submit">
-                                <%= toolAccess[tool.key] ? 'Revoke ' + tool.name : 'Grant ' + tool.name %>
-                              </button>
-                            </form>
-                          <% }) %>
-                        <% } %>
-                      <% } else { %>
-                        <span class="info-text">Admin always can pin and use tools</span>
-                      <% } %>
-
-                      <!-- Delete user -->
-                      <form class="inline-form" action="/admin/users/<%= user.id %>/delete" method="post" onsubmit="return confirm('Delete user <%= user.username %>? All their posts will be deleted.')">
-                        <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
-                        <button class="delete-btn" type="submit">Delete</button>
-                      </form>
-                    <% } else { %>
-                      <span class="info-text">Current user (self reset allowed)</span>
-                    <% } %>
+                  <td>
+                    <a class="view-btn user-manage-link" href="/admin/users/<%= user.id %>">Manage</a>
                   </td>
                 </tr>
               <% }) %>
@@ -146,15 +104,11 @@
       </section>
 
       <div class="info-box">
-        <h3>User Management Info</h3>
+        <h3>Quick Notes</h3>
         <ul>
-          <li><strong>Admin users</strong> can see all posts, create/edit/delete any post, pin/unpin posts, and manage users.</li>
-          <li><strong>Pin right</strong> lets a non-admin user pin/unpin posts they can view without giving admin access.</li>
-          <li><strong>Tool access</strong> controls which non-admin users can use each page in <code>/tools</code>.</li>
-          <li><strong>Password reset</strong> allows admin to set a new password for any user, including self.</li>
-          <li><strong>Normal users</strong> can create and manage their own posts, and view pinned content from others.</li>
-          <li>You cannot delete or demote yourself.</li>
-          <li>You cannot delete or demote the last admin user.</li>
+          <li>Use <strong>Manage</strong> to open a dedicated page for each user.</li>
+          <li>Admins always keep pin and tool access by role.</li>
+          <li>You cannot delete yourself or remove the last admin account.</li>
         </ul>
       </div>
     </div>

@@ -2357,36 +2357,88 @@ app.post('/comments/:id/delete', ensureAuth, verifyCsrfToken, async (req, res) =
 });
 
 // Admin: User Management routes
-app.get('/admin/users', ensureAdmin, async (req, res) => {
-  try {
-    const usersBase = await dbAllAsync(
-      'SELECT id, username, role, can_pin, last_login_at FROM users ORDER BY id ASC'
+function sanitizeAdminUsersReturnPath(rawValue, fallbackPath = '/admin/users') {
+  const fallback = String(fallbackPath || '/admin/users');
+  const value = String(rawValue || '').trim();
+  if (!value) return fallback;
+  if (value === '/admin/users') return value;
+  if (/^\/admin\/users\/\d+$/.test(value)) return value;
+  return fallback;
+}
+
+function appendQueryParamToPath(basePath, key, value) {
+  const safeBase = String(basePath || '/admin/users');
+  const separator = safeBase.includes('?') ? '&' : '?';
+  return `${safeBase}${separator}${encodeURIComponent(key)}=${encodeURIComponent(String(value || ''))}`;
+}
+
+async function loadUsersForAdminManagement() {
+  const usersBase = await dbAllAsync(
+    'SELECT id, username, role, can_pin, last_login_at FROM users ORDER BY id ASC'
+  );
+  const placeholders = TOOL_KEYS.map(() => '?').join(',');
+  const toolRows = TOOL_KEYS.length === 0
+    ? []
+    : await dbAllAsync(
+      `SELECT user_id, tool_key FROM user_tool_permissions WHERE tool_key IN (${placeholders})`,
+      TOOL_KEYS
     );
-    const placeholders = TOOL_KEYS.map(() => '?').join(',');
-    const toolRows = TOOL_KEYS.length === 0
-      ? []
-      : await dbAllAsync(
-        `SELECT user_id, tool_key FROM user_tool_permissions WHERE tool_key IN (${placeholders})`,
-        TOOL_KEYS
-      );
-    const toolAccessByUserId = new Map();
-    for (const user of usersBase) {
-      if (user.role === 'admin') {
-        toolAccessByUserId.set(user.id, buildAdminToolAccessMap());
-      } else {
-        toolAccessByUserId.set(user.id, buildDefaultToolAccessMap());
-      }
+  const toolAccessByUserId = new Map();
+  for (const user of usersBase) {
+    if (user.role === 'admin') {
+      toolAccessByUserId.set(user.id, buildAdminToolAccessMap());
+    } else {
+      toolAccessByUserId.set(user.id, buildDefaultToolAccessMap());
     }
+  }
+  for (const row of toolRows) {
+    if (!row || !TOOL_KEY_SET.has(row.tool_key)) continue;
+    const current = toolAccessByUserId.get(row.user_id) || buildDefaultToolAccessMap();
+    current[row.tool_key] = true;
+    toolAccessByUserId.set(row.user_id, current);
+  }
+  return usersBase.map((user) => ({
+    ...user,
+    toolAccess: toolAccessByUserId.get(user.id) || buildDefaultToolAccessMap()
+  }));
+}
+
+async function loadUserForAdminManagement(userId) {
+  const user = await dbGetAsync(
+    'SELECT id, username, role, can_pin, last_login_at FROM users WHERE id = ?',
+    [userId]
+  );
+  if (!user) return null;
+
+  if (user.role === 'admin') {
+    return {
+      ...user,
+      toolAccess: buildAdminToolAccessMap()
+    };
+  }
+
+  const toolAccess = buildDefaultToolAccessMap();
+  if (TOOL_KEYS.length > 0) {
+    const placeholders = TOOL_KEYS.map(() => '?').join(',');
+    const toolRows = await dbAllAsync(
+      `SELECT tool_key FROM user_tool_permissions WHERE user_id = ? AND tool_key IN (${placeholders})`,
+      [userId, ...TOOL_KEYS]
+    );
     for (const row of toolRows) {
       if (!row || !TOOL_KEY_SET.has(row.tool_key)) continue;
-      const current = toolAccessByUserId.get(row.user_id) || buildDefaultToolAccessMap();
-      current[row.tool_key] = true;
-      toolAccessByUserId.set(row.user_id, current);
+      toolAccess[row.tool_key] = true;
     }
-    const users = usersBase.map((user) => ({
-      ...user,
-      toolAccess: toolAccessByUserId.get(user.id) || buildDefaultToolAccessMap()
-    }));
+  }
+
+  return {
+    ...user,
+    toolAccess
+  };
+}
+
+app.get('/admin/users', ensureAdmin, async (req, res) => {
+  try {
+    const users = await loadUsersForAdminManagement();
     const adminUserError = typeof req.query.error === 'string' ? req.query.error : null;
     const adminUserMessage = typeof req.query.success === 'string' ? req.query.success : null;
     res.render('admin-users', {
@@ -2400,6 +2452,31 @@ app.get('/admin/users', ensureAdmin, async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).send('Error loading users');
+  }
+});
+
+app.get('/admin/users/:id', ensureAdmin, async (req, res) => {
+  const targetUserId = Number.parseInt(req.params.id, 10);
+  if (!Number.isInteger(targetUserId) || targetUserId <= 0) {
+    return res.status(400).send('Invalid user id');
+  }
+
+  try {
+    const targetUser = await loadUserForAdminManagement(targetUserId);
+    if (!targetUser) return res.status(404).send('User not found');
+    const adminUserError = typeof req.query.error === 'string' ? req.query.error : null;
+    const adminUserMessage = typeof req.query.success === 'string' ? req.query.success : null;
+    return res.render('admin-user-manage', {
+      targetUser,
+      toolCatalog: TOOL_DEFINITIONS,
+      userId: req.session.userId,
+      userRole: req.userRole,
+      adminUserError,
+      adminUserMessage
+    });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).send('Error loading user');
   }
 });
 
@@ -2438,6 +2515,7 @@ app.get('/admin/audit', ensureAdmin, async (req, res) => {
 app.post('/admin/users/:id/role', ensureAdmin, verifyCsrfToken, async (req, res) => {
   const targetUserId = Number.parseInt(req.params.id, 10);
   const newRole = req.body.role;
+  const returnTo = sanitizeAdminUsersReturnPath(req.body.returnTo, `/admin/users/${targetUserId}`);
 
   if (!Number.isInteger(targetUserId) || targetUserId <= 0) {
     return res.status(400).send('Invalid user id');
@@ -2448,11 +2526,18 @@ app.post('/admin/users/:id/role', ensureAdmin, verifyCsrfToken, async (req, res)
   }
 
   try {
+    if (targetUserId === req.session.userId && newRole === 'normal') {
+      return res.redirect(appendQueryParamToPath(returnTo, 'error', 'Cannot demote your own account.'));
+    }
+    const targetUser = await dbGetAsync('SELECT id FROM users WHERE id = ?', [targetUserId]);
+    if (!targetUser) {
+      return res.redirect(appendQueryParamToPath(returnTo, 'error', 'User not found.'));
+    }
     // Check if trying to demote the last admin
     if (newRole === 'normal') {
       const adminCount = await dbGetAsync('SELECT COUNT(*) as c FROM users WHERE role = "admin"');
       if (adminCount.c <= 1) {
-        return res.status(400).send('Cannot demote the last admin');
+        return res.redirect(appendQueryParamToPath(returnTo, 'error', 'Cannot demote the last admin'));
       }
     }
 
@@ -2471,16 +2556,17 @@ app.post('/admin/users/:id/role', ensureAdmin, verifyCsrfToken, async (req, res)
       }
     }
 
-    res.redirect('/admin/users');
+    res.redirect(appendQueryParamToPath(returnTo, 'success', `Updated role for user #${targetUserId}.`));
   } catch (err) {
     console.error(err);
-    res.status(500).send('Error updating user role');
+    res.redirect(appendQueryParamToPath(returnTo, 'error', 'Error updating user role.'));
   }
 });
 
 app.post('/admin/users/:id/pin-permission', ensureAdmin, verifyCsrfToken, async (req, res) => {
   const targetUserId = Number.parseInt(req.params.id, 10);
   const canPin = String(req.body.canPin || '').trim() === '1' ? 1 : 0;
+  const returnTo = sanitizeAdminUsersReturnPath(req.body.returnTo, `/admin/users/${targetUserId}`);
 
   if (!Number.isInteger(targetUserId) || targetUserId <= 0) {
     return res.status(400).send('Invalid user id');
@@ -2488,7 +2574,7 @@ app.post('/admin/users/:id/pin-permission', ensureAdmin, verifyCsrfToken, async 
 
   try {
     const targetUser = await dbGetAsync('SELECT id, role FROM users WHERE id = ?', [targetUserId]);
-    if (!targetUser) return res.status(404).send('User not found');
+    if (!targetUser) return res.redirect(appendQueryParamToPath(returnTo, 'error', 'User not found.'));
 
     // Admin users always have pin capability via role; this toggle is for non-admin users.
     if (targetUser.role !== 'admin') {
@@ -2500,10 +2586,10 @@ app.post('/admin/users/:id/pin-permission', ensureAdmin, verifyCsrfToken, async 
       req.session.userCanPin = canPin === 1;
     }
 
-    res.redirect('/admin/users');
+    res.redirect(appendQueryParamToPath(returnTo, 'success', `Updated pin permission for user #${targetUserId}.`));
   } catch (err) {
     console.error(err);
-    res.status(500).send('Error updating pin permission');
+    res.redirect(appendQueryParamToPath(returnTo, 'error', 'Error updating pin permission.'));
   }
 });
 
@@ -2511,6 +2597,7 @@ app.post('/admin/users/:id/tool-access', ensureAdmin, verifyCsrfToken, async (re
   const targetUserId = Number.parseInt(req.params.id, 10);
   const toolKey = String(req.body.toolKey || '').trim();
   const granted = String(req.body.granted || '').trim() === '1';
+  const returnTo = sanitizeAdminUsersReturnPath(req.body.returnTo, `/admin/users/${targetUserId}`);
 
   if (!Number.isInteger(targetUserId) || targetUserId <= 0) {
     return res.status(400).send('Invalid user id');
@@ -2521,7 +2608,7 @@ app.post('/admin/users/:id/tool-access', ensureAdmin, verifyCsrfToken, async (re
 
   try {
     const targetUser = await dbGetAsync('SELECT id, role FROM users WHERE id = ?', [targetUserId]);
-    if (!targetUser) return res.status(404).send('User not found');
+    if (!targetUser) return res.redirect(appendQueryParamToPath(returnTo, 'error', 'User not found.'));
 
     if (targetUser.role !== 'admin') {
       if (granted) {
@@ -2553,42 +2640,44 @@ app.post('/admin/users/:id/tool-access', ensureAdmin, verifyCsrfToken, async (re
       req.session.userToolAccessLoaded = true;
     }
 
-    return res.redirect('/admin/users');
+    return res.redirect(appendQueryParamToPath(returnTo, 'success', `Updated tool access for user #${targetUserId}.`));
   } catch (err) {
     console.error(err);
-    return res.status(500).send('Error updating tool access');
+    return res.redirect(appendQueryParamToPath(returnTo, 'error', 'Error updating tool access.'));
   }
 });
 
 app.post('/admin/users/:id/reset-password', ensureAdmin, verifyCsrfToken, async (req, res) => {
   const targetUserId = Number.parseInt(req.params.id, 10);
   const newPassword = String(req.body.newPassword || '');
+  const returnTo = sanitizeAdminUsersReturnPath(req.body.returnTo, `/admin/users/${targetUserId}`);
 
   if (!Number.isInteger(targetUserId) || targetUserId <= 0) {
     return res.status(400).send('Invalid user id');
   }
 
   if (newPassword.length < 8) {
-    return res.redirect('/admin/users?error=Password%20must%20be%20at%20least%208%20characters.');
+    return res.redirect(appendQueryParamToPath(returnTo, 'error', 'Password must be at least 8 characters.'));
   }
 
   try {
     const user = await dbGetAsync('SELECT id FROM users WHERE id = ?', [targetUserId]);
-    if (!user) return res.status(404).send('User not found');
+    if (!user) return res.redirect(appendQueryParamToPath(returnTo, 'error', 'User not found.'));
 
     const newHash = bcrypt.hashSync(newPassword, 10);
     await dbRunAsync('UPDATE users SET password_hash = ? WHERE id = ?', [newHash, targetUserId]);
     await appendAuditLog(req, 'user.password_reset', 'user', targetUserId, null);
 
-    return res.redirect(`/admin/users?success=Password%20reset%20for%20user%20%23${targetUserId}.`);
+    return res.redirect(appendQueryParamToPath(returnTo, 'success', `Password reset for user #${targetUserId}.`));
   } catch (err) {
     console.error(err);
-    return res.redirect('/admin/users?error=Failed%20to%20reset%20password.');
+    return res.redirect(appendQueryParamToPath(returnTo, 'error', 'Failed to reset password.'));
   }
 });
 
 app.post('/admin/users/:id/delete', ensureAdmin, verifyCsrfToken, async (req, res) => {
   const targetUserId = Number.parseInt(req.params.id, 10);
+  const returnTo = sanitizeAdminUsersReturnPath(req.body.returnTo, `/admin/users/${targetUserId}`);
 
   if (!Number.isInteger(targetUserId) || targetUserId <= 0) {
     return res.status(400).send('Invalid user id');
@@ -2596,18 +2685,18 @@ app.post('/admin/users/:id/delete', ensureAdmin, verifyCsrfToken, async (req, re
 
   // Prevent deleting yourself
   if (targetUserId === req.session.userId) {
-    return res.status(400).send('Cannot delete your own account');
+    return res.redirect(appendQueryParamToPath(returnTo, 'error', 'Cannot delete your own account.'));
   }
 
   try {
     // Check if trying to delete the last admin
     const user = await dbGetAsync('SELECT role FROM users WHERE id = ?', [targetUserId]);
-    if (!user) return res.status(404).send('User not found');
+    if (!user) return res.redirect(appendQueryParamToPath(returnTo, 'error', 'User not found.'));
 
     if (user.role === 'admin') {
       const adminCount = await dbGetAsync('SELECT COUNT(*) as c FROM users WHERE role = "admin"');
       if (adminCount.c <= 1) {
-        return res.status(400).send('Cannot delete the last admin');
+        return res.redirect(appendQueryParamToPath(returnTo, 'error', 'Cannot delete the last admin.'));
       }
     }
 
@@ -2642,10 +2731,10 @@ app.post('/admin/users/:id/delete', ensureAdmin, verifyCsrfToken, async (req, re
     await dbRunAsync('DELETE FROM users WHERE id = ?', [targetUserId]);
     await appendAuditLog(req, 'user.delete', 'user', targetUserId, null);
 
-    res.redirect('/admin/users');
+    res.redirect(appendQueryParamToPath('/admin/users', 'success', `Deleted user #${targetUserId}.`));
   } catch (err) {
     console.error(err);
-    res.status(500).send('Error deleting user');
+    res.redirect(appendQueryParamToPath(returnTo, 'error', 'Error deleting user.'));
   }
 });
 

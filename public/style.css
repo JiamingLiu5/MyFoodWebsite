@@ -726,6 +726,36 @@ body.enable-reveal .entry.is-visible{opacity:1;transform:translateY(0) scale(1)}
   transition:background 0.2s ease;
 }
 
+.users-directory-table td,
+.users-directory-table th{
+  vertical-align:middle;
+}
+
+.users-directory-user{
+  display:flex;
+  align-items:center;
+  gap:8px;
+  flex-wrap:wrap;
+}
+
+.users-directory-name{
+  font-family:'Cinzel',serif;
+  font-size:24px;
+  line-height:1.08;
+}
+
+.users-directory-link{
+  color:var(--text);
+  text-decoration:none;
+}
+
+.users-directory-link:hover{
+  color:var(--secondary);
+  text-decoration:underline;
+}
+
+.user-manage-link{white-space:nowrap}
+
 .role-badge{
   display:inline-block;
   padding:4px 12px;
@@ -801,6 +831,125 @@ body.enable-reveal .entry.is-visible{opacity:1;transform:translateY(0) scale(1)}
   border-radius:8px;
   font:inherit;
 }
+
+.manage-user-shell{
+  margin-top:20px;
+  display:grid;
+  gap:14px;
+}
+
+.manage-user-top{
+  display:flex;
+  align-items:flex-start;
+  justify-content:space-between;
+  gap:14px;
+  padding:16px;
+  border:1px solid var(--line);
+  border-radius:14px;
+  background:var(--surface-strong);
+  box-shadow:var(--shadow-md);
+}
+
+.manage-user-id{
+  margin:0 0 6px;
+  color:var(--muted);
+  font-size:12px;
+  font-weight:800;
+  text-transform:uppercase;
+  letter-spacing:.08em;
+}
+
+.manage-user-name{
+  margin:0;
+  font-family:'Cinzel',serif;
+  font-size:clamp(28px,3.5vw,40px);
+  line-height:1.08;
+}
+
+.manage-user-stats{
+  display:grid;
+  grid-template-columns:repeat(3,minmax(0,1fr));
+  gap:12px;
+}
+
+.manage-stat-card{
+  padding:14px;
+  border:1px solid var(--line);
+  border-radius:12px;
+  background:var(--surface-strong);
+  box-shadow:var(--shadow-md);
+  display:grid;
+  gap:8px;
+}
+
+.manage-stat-card h3{
+  margin:0;
+  color:var(--muted);
+  font-size:12px;
+  font-weight:800;
+  text-transform:uppercase;
+  letter-spacing:.08em;
+}
+
+.manage-section{
+  display:grid;
+  gap:10px;
+  padding:16px;
+  border:1px solid var(--line);
+  border-radius:14px;
+  background:var(--surface-strong);
+  box-shadow:var(--shadow-md);
+}
+
+.manage-section h3{
+  margin:0;
+  color:var(--primary);
+  font-family:'Cinzel',serif;
+  font-size:22px;
+}
+
+.manage-inline-form{
+  display:flex;
+  align-items:center;
+  gap:10px;
+  flex-wrap:wrap;
+}
+
+.manage-input{
+  flex:1;
+  min-width:220px;
+  max-width:360px;
+}
+
+.manage-tools-list{
+  display:grid;
+  gap:10px;
+}
+
+.manage-tool-item{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:12px;
+  padding:10px;
+  border:1px solid var(--line);
+  border-radius:10px;
+  background:color-mix(in srgb, var(--surface) 70%, white);
+}
+
+.manage-tool-meta{
+  display:flex;
+  align-items:center;
+  gap:10px;
+  flex-wrap:wrap;
+}
+
+.manage-danger-zone{
+  border-color:color-mix(in srgb, var(--danger) 35%, var(--line));
+  background:color-mix(in srgb, var(--danger-soft) 26%, var(--surface-strong));
+}
+
+.manage-danger-zone h3{color:var(--danger)}
 
 .auth-secondary-actions{
   display:flex;
@@ -1338,9 +1487,17 @@ body.has-action-sidebar.sidebar-collapsed{
   /* User management responsive */
   .users-table{font-size:13px}
   .users-table th,.users-table td{padding:10px 8px}
+  .users-directory-name{font-size:18px}
   .user-actions{flex-direction:column;gap:6px}
   .role-btn,.delete-btn{width:100%;font-size:12px;padding:6px 12px}
   .tool-access-cell{min-width:0}
+  .manage-user-top{flex-direction:column;align-items:flex-start}
+  .manage-user-stats{grid-template-columns:1fr}
+  .manage-inline-form{flex-direction:column;align-items:stretch}
+  .manage-input{min-width:0;max-width:none}
+  .manage-tool-item{flex-direction:column;align-items:flex-start}
+  .manage-tool-meta{width:100%;justify-content:space-between}
+  .user-manage-link{width:100%}
   .tool-form button{width:100%}
   .action-sidebar{
     left:12px;

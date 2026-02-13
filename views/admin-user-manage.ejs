@@ -1,0 +1,166 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Manage User</title>
+    <link rel="stylesheet" href="/static/style.css" />
+    <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
+  </head>
+  <body>
+    <div class="container">
+      <header class="page-header">
+        <div>
+          <h1 class="brand-title">Manage User</h1>
+          <p class="brand-subtitle">Edit access and security settings for one account.</p>
+        </div>
+        <nav class="top-nav">
+          <a href="/">Home</a>
+          <a href="/tools">Tools</a>
+          <a href="/admin/users">Manage Users</a>
+          <a href="/admin/audit">Audit Log</a>
+          <form class="top-nav-form" action="/logout" method="post">
+            <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
+            <button class="top-nav-btn" type="submit">Logout</button>
+          </form>
+        </nav>
+      </header>
+
+      <% const isCurrentUser = Number(targetUser.id) === Number(userId); %>
+      <% const isAdminUser = targetUser.role === 'admin'; %>
+      <% const hasExplicitPinRight = Number(targetUser.can_pin || 0) === 1; %>
+      <% const hasPinRight = isAdminUser || hasExplicitPinRight; %>
+      <% const toolAccess = targetUser.toolAccess || {}; %>
+
+      <% if (adminUserError) { %>
+        <p class="upload-error"><%= adminUserError %></p>
+      <% } %>
+      <% if (adminUserMessage) { %>
+        <p class="success-note"><%= adminUserMessage %></p>
+      <% } %>
+
+      <section class="manage-user-shell">
+        <article class="manage-user-top">
+          <div>
+            <p class="manage-user-id">User #<%= targetUser.id %></p>
+            <h2 class="manage-user-name">
+              <%= targetUser.username %>
+              <% if (isCurrentUser) { %>
+                <span class="badge">(You)</span>
+              <% } %>
+            </h2>
+          </div>
+          <a class="view-btn" href="/admin/users">Back to User List</a>
+        </article>
+
+        <div class="manage-user-stats">
+          <article class="manage-stat-card">
+            <h3>Role</h3>
+            <span class="role-badge role-<%= targetUser.role %>"><%= targetUser.role %></span>
+          </article>
+          <article class="manage-stat-card">
+            <h3>Pin Right</h3>
+            <span class="permission-badge <%= hasPinRight ? 'permission-on' : 'permission-off' %>">
+              <%= hasPinRight ? 'Can Pin' : 'No Pin' %>
+            </span>
+          </article>
+          <article class="manage-stat-card">
+            <h3>Last Login</h3>
+            <% if (targetUser.last_login_at) { %>
+              <span><%= new Date(targetUser.last_login_at).toLocaleString() %></span>
+            <% } else { %>
+              <span class="info-text">Never</span>
+            <% } %>
+          </article>
+        </div>
+
+        <article class="manage-section">
+          <h3>Password</h3>
+          <form class="manage-inline-form" action="/admin/users/<%= targetUser.id %>/reset-password" method="post">
+            <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
+            <input type="hidden" name="returnTo" value="/admin/users/<%= targetUser.id %>" />
+            <input class="reset-password-input manage-input" type="password" name="newPassword" minlength="8" placeholder="New password (min 8)" required />
+            <button class="reset-btn" type="submit" onclick="return confirm('Reset password for <%= targetUser.username %>?')">Reset Password</button>
+          </form>
+        </article>
+
+        <article class="manage-section">
+          <h3>Role Access</h3>
+          <% if (isCurrentUser) { %>
+            <p class="info-text">Current user role cannot be changed here.</p>
+          <% } else { %>
+            <form class="inline-form" action="/admin/users/<%= targetUser.id %>/role" method="post">
+              <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
+              <input type="hidden" name="returnTo" value="/admin/users/<%= targetUser.id %>" />
+              <input type="hidden" name="role" value="<%= isAdminUser ? 'normal' : 'admin' %>" />
+              <button class="role-btn" type="submit">
+                <%= isAdminUser ? 'Demote to Normal' : 'Promote to Admin' %>
+              </button>
+            </form>
+          <% } %>
+        </article>
+
+        <article class="manage-section">
+          <h3>Pin Permission</h3>
+          <% if (isAdminUser) { %>
+            <p class="info-text">Admin accounts always have pin rights.</p>
+          <% } else { %>
+            <form class="inline-form" action="/admin/users/<%= targetUser.id %>/pin-permission" method="post">
+              <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
+              <input type="hidden" name="returnTo" value="/admin/users/<%= targetUser.id %>" />
+              <input type="hidden" name="canPin" value="<%= hasExplicitPinRight ? 0 : 1 %>" />
+              <button class="perm-btn" type="submit">
+                <%= hasExplicitPinRight ? 'Revoke Pin Right' : 'Grant Pin Right' %>
+              </button>
+            </form>
+          <% } %>
+        </article>
+
+        <article class="manage-section">
+          <h3>Tool Access</h3>
+          <% if (isAdminUser) { %>
+            <p class="info-text">Admin accounts always have access to all tools.</p>
+          <% } else if (!toolCatalog || toolCatalog.length === 0) { %>
+            <p class="info-text">No tools configured.</p>
+          <% } else { %>
+            <div class="manage-tools-list">
+              <% toolCatalog.forEach(function(tool) { %>
+                <div class="manage-tool-item">
+                  <div class="manage-tool-meta">
+                    <strong><%= tool.name %></strong>
+                    <span class="permission-badge <%= toolAccess[tool.key] ? 'permission-on' : 'permission-off' %>">
+                      <%= toolAccess[tool.key] ? 'Enabled' : 'Disabled' %>
+                    </span>
+                  </div>
+                  <form class="inline-form" action="/admin/users/<%= targetUser.id %>/tool-access" method="post">
+                    <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
+                    <input type="hidden" name="returnTo" value="/admin/users/<%= targetUser.id %>" />
+                    <input type="hidden" name="toolKey" value="<%= tool.key %>" />
+                    <input type="hidden" name="granted" value="<%= toolAccess[tool.key] ? 0 : 1 %>" />
+                    <button class="perm-btn" type="submit">
+                      <%= toolAccess[tool.key] ? 'Revoke ' + tool.name : 'Grant ' + tool.name %>
+                    </button>
+                  </form>
+                </div>
+              <% }) %>
+            </div>
+          <% } %>
+        </article>
+
+        <article class="manage-section manage-danger-zone">
+          <h3>Danger Zone</h3>
+          <% if (isCurrentUser) { %>
+            <p class="info-text">You cannot delete your own account.</p>
+          <% } else { %>
+            <form class="inline-form" action="/admin/users/<%= targetUser.id %>/delete" method="post" onsubmit="return confirm('Delete user <%= targetUser.username %>? All their posts will be deleted.')">
+              <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
+              <input type="hidden" name="returnTo" value="/admin/users/<%= targetUser.id %>" />
+              <button class="delete-btn" type="submit">Delete User</button>
+            </form>
+          <% } %>
+        </article>
+      </section>
+    </div>
+    <script src="/static/script.js"></script>
+  </body>
+</html>

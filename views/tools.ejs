@@ -55,7 +55,13 @@
               <form class="upload-form tool-form" action="/tools/<%= encodeURIComponent(tool.key) %>/run" method="post" enctype="multipart/form-data">
                 <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
                 <label><%= tool.inputLabel || 'Files' %></label>
-                <input type="file" name="<%= tool.inputFieldName %>" <%= tool.fileAccept ? 'accept="' + tool.fileAccept + '"' : '' %> multiple required />
+                <input
+                  type="file"
+                  name="<%= tool.inputFieldName %>"
+                  <% if (tool.fileAccept) { %>accept="<%= tool.fileAccept %>"<% } %>
+                  multiple
+                  required
+                />
                 <% if (tool.supportsOutputName) { %>
                   <label>Output file name (optional)</label>
                   <input

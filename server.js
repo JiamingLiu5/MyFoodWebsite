@@ -202,6 +202,19 @@ app.use(async (req, res, next) => {
 // DB
 const db = new sqlite3.Database(DB_PATH);
 db.serialize(() => {
+  const hasColumn = (cols, name) => Array.isArray(cols) && cols.some((col) => col.name === name);
+  const addColumnIfMissing = (tableName, cols, columnName, columnTypeSql, options = {}) => {
+    const { errorLabel, onAdded } = options;
+    if (hasColumn(cols, columnName)) return;
+    db.run(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${columnTypeSql}`, (alterErr) => {
+      if (alterErr) {
+        console.error(errorLabel || `${tableName} ${columnName} migration error:`, alterErr);
+        return;
+      }
+      if (typeof onAdded === 'function') onAdded();
+    });
+  };
+
   db.run(`CREATE TABLE IF NOT EXISTS entries (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     filename TEXT,
@@ -224,17 +237,13 @@ db.serialize(() => {
   )`);
   db.all('PRAGMA table_info(entries)', (pragmaErr, cols) => {
     if (pragmaErr) return console.error('PRAGMA entries error:', pragmaErr);
-    const hasPinned = Array.isArray(cols) && cols.some((col) => col.name === 'is_pinned');
-    if (!hasPinned) {
-      db.run('ALTER TABLE entries ADD COLUMN is_pinned INTEGER DEFAULT 0', (alterErr) => {
-        if (alterErr) console.error('entries migration error:', alterErr);
-      });
-    }
+    addColumnIfMissing('entries', cols, 'is_pinned', 'INTEGER DEFAULT 0', {
+      errorLabel: 'entries migration error:'
+    });
     // Migration: Add user_id column to entries table
-    const hasUserId = Array.isArray(cols) && cols.some((col) => col.name === 'user_id');
-    if (!hasUserId) {
-      db.run('ALTER TABLE entries ADD COLUMN user_id INTEGER', (alterErr) => {
-        if (alterErr) return console.error('entries user_id migration error:', alterErr);
+    addColumnIfMissing('entries', cols, 'user_id', 'INTEGER', {
+      errorLabel: 'entries user_id migration error:',
+      onAdded: () => {
         console.log('✓ Added user_id column to entries');
         // Set existing entries to first user (id=1)
         db.run('UPDATE entries SET user_id = 1 WHERE user_id IS NULL', (updateErr) => {
@@ -243,92 +252,27 @@ db.serialize(() => {
         });
         // Create index for faster queries
         db.run('CREATE INDEX IF NOT EXISTS idx_entries_user_id ON entries(user_id)');
+      }
+    });
+    [
+      ['is_draft', 'INTEGER DEFAULT 0'],
+      ['deleted_at', 'INTEGER'],
+      ['deleted_by', 'INTEGER'],
+      ['collection_id', 'INTEGER'],
+      ['author_label', 'TEXT'],
+      ['location_text', 'TEXT'],
+      ['rating_value', 'REAL'],
+      ['video_filename', 'TEXT'],
+      ['video_originalname', 'TEXT'],
+      ['video_mimetype', 'TEXT'],
+      ['video_poster_filename', 'TEXT'],
+      ['video_poster_originalname', 'TEXT']
+    ].forEach(([columnName, columnTypeSql]) => {
+      addColumnIfMissing('entries', cols, columnName, columnTypeSql, {
+        errorLabel: `entries ${columnName} migration error:`,
+        onAdded: () => console.log(`✓ Added ${columnName} column to entries`)
       });
-    }
-    const hasDraft = Array.isArray(cols) && cols.some((col) => col.name === 'is_draft');
-    if (!hasDraft) {
-      db.run('ALTER TABLE entries ADD COLUMN is_draft INTEGER DEFAULT 0', (alterErr) => {
-        if (alterErr) console.error('entries is_draft migration error:', alterErr);
-        else console.log('✓ Added is_draft column to entries');
-      });
-    }
-    const hasDeletedAt = Array.isArray(cols) && cols.some((col) => col.name === 'deleted_at');
-    if (!hasDeletedAt) {
-      db.run('ALTER TABLE entries ADD COLUMN deleted_at INTEGER', (alterErr) => {
-        if (alterErr) console.error('entries deleted_at migration error:', alterErr);
-        else console.log('✓ Added deleted_at column to entries');
-      });
-    }
-    const hasDeletedBy = Array.isArray(cols) && cols.some((col) => col.name === 'deleted_by');
-    if (!hasDeletedBy) {
-      db.run('ALTER TABLE entries ADD COLUMN deleted_by INTEGER', (alterErr) => {
-        if (alterErr) console.error('entries deleted_by migration error:', alterErr);
-        else console.log('✓ Added deleted_by column to entries');
-      });
-    }
-    const hasCollectionId = Array.isArray(cols) && cols.some((col) => col.name === 'collection_id');
-    if (!hasCollectionId) {
-      db.run('ALTER TABLE entries ADD COLUMN collection_id INTEGER', (alterErr) => {
-        if (alterErr) console.error('entries collection_id migration error:', alterErr);
-        else console.log('✓ Added collection_id column to entries');
-      });
-    }
-    const hasAuthorLabel = Array.isArray(cols) && cols.some((col) => col.name === 'author_label');
-    if (!hasAuthorLabel) {
-      db.run('ALTER TABLE entries ADD COLUMN author_label TEXT', (alterErr) => {
-        if (alterErr) console.error('entries author_label migration error:', alterErr);
-        else console.log('✓ Added author_label column to entries');
-      });
-    }
-    const hasLocationText = Array.isArray(cols) && cols.some((col) => col.name === 'location_text');
-    if (!hasLocationText) {
-      db.run('ALTER TABLE entries ADD COLUMN location_text TEXT', (alterErr) => {
-        if (alterErr) console.error('entries location_text migration error:', alterErr);
-        else console.log('✓ Added location_text column to entries');
-      });
-    }
-    const hasRatingValue = Array.isArray(cols) && cols.some((col) => col.name === 'rating_value');
-    if (!hasRatingValue) {
-      db.run('ALTER TABLE entries ADD COLUMN rating_value REAL', (alterErr) => {
-        if (alterErr) console.error('entries rating_value migration error:', alterErr);
-        else console.log('✓ Added rating_value column to entries');
-      });
-    }
-    const hasVideoFilename = Array.isArray(cols) && cols.some((col) => col.name === 'video_filename');
-    if (!hasVideoFilename) {
-      db.run('ALTER TABLE entries ADD COLUMN video_filename TEXT', (alterErr) => {
-        if (alterErr) console.error('entries video_filename migration error:', alterErr);
-        else console.log('✓ Added video_filename column to entries');
-      });
-    }
-    const hasVideoOriginalname = Array.isArray(cols) && cols.some((col) => col.name === 'video_originalname');
-    if (!hasVideoOriginalname) {
-      db.run('ALTER TABLE entries ADD COLUMN video_originalname TEXT', (alterErr) => {
-        if (alterErr) console.error('entries video_originalname migration error:', alterErr);
-        else console.log('✓ Added video_originalname column to entries');
-      });
-    }
-    const hasVideoMimetype = Array.isArray(cols) && cols.some((col) => col.name === 'video_mimetype');
-    if (!hasVideoMimetype) {
-      db.run('ALTER TABLE entries ADD COLUMN video_mimetype TEXT', (alterErr) => {
-        if (alterErr) console.error('entries video_mimetype migration error:', alterErr);
-        else console.log('✓ Added video_mimetype column to entries');
-      });
-    }
-    const hasVideoPosterFilename = Array.isArray(cols) && cols.some((col) => col.name === 'video_poster_filename');
-    if (!hasVideoPosterFilename) {
-      db.run('ALTER TABLE entries ADD COLUMN video_poster_filename TEXT', (alterErr) => {
-        if (alterErr) console.error('entries video_poster_filename migration error:', alterErr);
-        else console.log('✓ Added video_poster_filename column to entries');
-      });
-    }
-    const hasVideoPosterOriginalname = Array.isArray(cols) && cols.some((col) => col.name === 'video_poster_originalname');
-    if (!hasVideoPosterOriginalname) {
-      db.run('ALTER TABLE entries ADD COLUMN video_poster_originalname TEXT', (alterErr) => {
-        if (alterErr) console.error('entries video_poster_originalname migration error:', alterErr);
-        else console.log('✓ Added video_poster_originalname column to entries');
-      });
-    }
+    });
     db.run('CREATE INDEX IF NOT EXISTS idx_entries_created_at ON entries(created_at)');
     db.run('CREATE INDEX IF NOT EXISTS idx_entries_deleted_at ON entries(deleted_at)');
     db.run('CREATE INDEX IF NOT EXISTS idx_entries_collection_id ON entries(collection_id)');
@@ -430,23 +374,21 @@ db.serialize(() => {
         }
       );
     };
-    const hasRole = Array.isArray(cols) && cols.some((col) => col.name === 'role');
-    if (!hasRole) {
-      db.run('ALTER TABLE users ADD COLUMN role TEXT DEFAULT "normal"', (alterErr) => {
-        if (alterErr) return console.error('users role migration error:', alterErr);
+    addColumnIfMissing('users', cols, 'role', 'TEXT DEFAULT "normal"', {
+      errorLabel: 'users role migration error:',
+      onAdded: () => {
         console.log('✓ Added role column to users');
         // Set first user to admin
         db.run('UPDATE users SET role = "admin" WHERE id = 1', (updateErr) => {
           if (updateErr) console.error('users role update error:', updateErr);
           else console.log('✓ First user set to admin role');
         });
-      });
-    }
-    const hasEmail = Array.isArray(cols) && cols.some((col) => col.name === 'email');
-    if (!hasEmail) {
-      db.run('ALTER TABLE users ADD COLUMN email TEXT', (alterErr) => {
-        if (alterErr) console.error('users email migration error:', alterErr);
-        else {
+      }
+    });
+    if (!hasColumn(cols, 'email')) {
+      addColumnIfMissing('users', cols, 'email', 'TEXT', {
+        errorLabel: 'users email migration error:',
+        onAdded: () => {
           console.log('✓ Added email column to users');
           ensureUsersEmailIndex();
         }
@@ -454,27 +396,16 @@ db.serialize(() => {
     } else {
       ensureUsersEmailIndex();
     }
-    const hasEmailVerifiedAt = Array.isArray(cols) && cols.some((col) => col.name === 'email_verified_at');
-    if (!hasEmailVerifiedAt) {
-      db.run('ALTER TABLE users ADD COLUMN email_verified_at INTEGER', (alterErr) => {
-        if (alterErr) console.error('users email_verified_at migration error:', alterErr);
-        else console.log('✓ Added email_verified_at column to users');
+    [
+      ['email_verified_at', 'INTEGER'],
+      ['can_pin', 'INTEGER DEFAULT 0'],
+      ['last_login_at', 'INTEGER']
+    ].forEach(([columnName, columnTypeSql]) => {
+      addColumnIfMissing('users', cols, columnName, columnTypeSql, {
+        errorLabel: `users ${columnName} migration error:`,
+        onAdded: () => console.log(`✓ Added ${columnName} column to users`)
       });
-    }
-    const hasCanPin = Array.isArray(cols) && cols.some((col) => col.name === 'can_pin');
-    if (!hasCanPin) {
-      db.run('ALTER TABLE users ADD COLUMN can_pin INTEGER DEFAULT 0', (alterErr) => {
-        if (alterErr) return console.error('users can_pin migration error:', alterErr);
-        console.log('✓ Added can_pin column to users');
-      });
-    }
-    const hasLastLoginAt = Array.isArray(cols) && cols.some((col) => col.name === 'last_login_at');
-    if (!hasLastLoginAt) {
-      db.run('ALTER TABLE users ADD COLUMN last_login_at INTEGER', (alterErr) => {
-        if (alterErr) return console.error('users last_login_at migration error:', alterErr);
-        console.log('✓ Added last_login_at column to users');
-      });
-    }
+    });
   });
 });
 

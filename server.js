@@ -10,6 +10,8 @@ const sqlite3 = require('sqlite3').verbose();
 const session = require('express-session');
 const bcrypt = require('bcryptjs');
 const { S3Client, PutObjectCommand, DeleteObjectCommand } = require('@aws-sdk/client-s3');
+const { ToolRegistry } = require('./src/framework/tool-registry');
+const { createPdfMergeTool } = require('./src/tools/pdf-merge-tool');
 let nodemailer = null;
 try {
   nodemailer = require('nodemailer');
@@ -35,9 +37,44 @@ const MAX_FILES_PER_POST = MAX_IMAGES_PER_POST + 1;
 const ENABLE_SERVER_VIDEO_PROCESSING = process.env.ENABLE_SERVER_VIDEO_PROCESSING === 'true';
 const ENABLE_VIDEO_TRANSCODE = process.env.ENABLE_VIDEO_TRANSCODE !== 'false';
 const FFMPEG_PATH = String(process.env.FFMPEG_PATH || 'ffmpeg').trim() || 'ffmpeg';
+const GHOSTSCRIPT_PATH = String(process.env.GHOSTSCRIPT_PATH || 'gs').trim() || 'gs';
+const MAX_TOOL_PDF_FILES = Math.max(2, Number.parseInt(process.env.MAX_TOOL_PDF_FILES || '10', 10));
+const MAX_TOOL_PDF_FILE_SIZE_MB = Math.max(1, Number.parseInt(process.env.MAX_TOOL_PDF_FILE_SIZE_MB || '20', 10));
+const MAX_TOOL_PDF_TOTAL_INPUT_MB = Math.max(1, Number.parseInt(process.env.MAX_TOOL_PDF_TOTAL_INPUT_MB || '80', 10));
+const TOOL_RUN_TIMEOUT_SECONDS = Math.max(5, Number.parseInt(process.env.TOOL_RUN_TIMEOUT_SECONDS || '45', 10));
+const toolRegistry = new ToolRegistry();
+toolRegistry.register(createPdfMergeTool({
+  ghostscriptPath: GHOSTSCRIPT_PATH,
+  maxFiles: MAX_TOOL_PDF_FILES,
+  maxFileSizeMb: MAX_TOOL_PDF_FILE_SIZE_MB,
+  maxTotalInputSizeMb: MAX_TOOL_PDF_TOTAL_INPUT_MB,
+  executionTimeoutSeconds: TOOL_RUN_TIMEOUT_SECONDS
+}));
+const TOOL_DEFINITIONS = Object.freeze(toolRegistry.list().map((tool) => ({
+  key: tool.key,
+  name: tool.name,
+  description: tool.description,
+  inputFieldName: tool.inputFieldName,
+  inputLabel: tool.inputLabel || null,
+  fileAccept: tool.fileAccept || null,
+  supportsOutputName: tool.supportsOutputName === true,
+  outputNamePlaceholder: tool.outputNamePlaceholder || null,
+  notes: Array.isArray(tool.notes) ? tool.notes.slice() : [],
+  submitLabel: tool.submitLabel || 'Run',
+  maxFiles: tool.maxFiles || null,
+  maxFileSizeMb: tool.maxFileSizeMb || null,
+  maxTotalInputSizeMb: tool.maxTotalInputSizeMb || null
+})));
+const TOOL_KEYS = toolRegistry.keys();
+const TOOL_KEY_SET = new Set(TOOL_KEYS);
 const AUTH_RATE_LIMIT_WINDOW_MINUTES = Math.max(1, Number.parseInt(process.env.AUTH_RATE_LIMIT_WINDOW_MINUTES || '15', 10));
 const AUTH_RATE_LIMIT_MAX_ATTEMPTS = Math.max(1, Number.parseInt(process.env.AUTH_RATE_LIMIT_MAX_ATTEMPTS || '25', 10));
 const AUTH_RATE_LIMIT_WINDOW_MS = AUTH_RATE_LIMIT_WINDOW_MINUTES * 60 * 1000;
+const TOOL_RATE_LIMIT_WINDOW_SECONDS = Math.max(10, Number.parseInt(process.env.TOOL_RATE_LIMIT_WINDOW_SECONDS || '60', 10));
+const TOOL_RATE_LIMIT_MAX_RUNS = Math.max(1, Number.parseInt(process.env.TOOL_RATE_LIMIT_MAX_RUNS || '6', 10));
+const TOOL_RATE_LIMIT_WINDOW_MS = TOOL_RATE_LIMIT_WINDOW_SECONDS * 1000;
+const TOOL_MAX_CONCURRENT_RUNS = Math.max(1, Number.parseInt(process.env.TOOL_MAX_CONCURRENT_RUNS || '2', 10));
+const TOOL_MAX_CONCURRENT_RUNS_PER_TOOL = Math.max(1, Number.parseInt(process.env.TOOL_MAX_CONCURRENT_RUNS_PER_TOOL || '1', 10));
 const TRUST_PROXY = process.env.TRUST_PROXY === 'true';
 const SESSION_COOKIE_SECURE = process.env.SESSION_COOKIE_SECURE === 'true';
 const SESSION_COOKIE_SAME_SITE = process.env.SESSION_COOKIE_SAME_SITE || 'lax';
@@ -79,6 +116,56 @@ const uploadPostMedia = upload.fields([
   { name: 'photos', maxCount: MAX_IMAGES_PER_POST },
   { name: 'video', maxCount: 1 }
 ]);
+const toolUploadMiddlewares = new Map(
+  toolRegistry.list().map((tool) => [tool.key, tool.createUploadMiddleware(multer)])
+);
+
+function buildDefaultToolAccessMap() {
+  const map = {};
+  for (const toolKey of TOOL_KEYS) map[toolKey] = false;
+  return map;
+}
+
+function buildAdminToolAccessMap() {
+  const map = {};
+  for (const toolKey of TOOL_KEYS) map[toolKey] = true;
+  return map;
+}
+
+function normalizeToolAccessMap(value) {
+  const normalized = buildDefaultToolAccessMap();
+  if (!value || typeof value !== 'object') return normalized;
+  for (const toolKey of TOOL_KEYS) {
+    normalized[toolKey] = Boolean(value[toolKey]);
+  }
+  return normalized;
+}
+
+function userHasAnyToolAccess(accessMap) {
+  for (const toolKey of TOOL_KEYS) {
+    if (Boolean(accessMap?.[toolKey])) return true;
+  }
+  return false;
+}
+
+function buildToolCatalogForAccess(accessMap) {
+  return toolRegistry.list().map((tool) => ({
+    key: tool.key,
+    name: tool.name,
+    description: tool.description,
+    inputFieldName: tool.inputFieldName,
+    inputLabel: tool.inputLabel || null,
+    fileAccept: tool.fileAccept || null,
+    supportsOutputName: tool.supportsOutputName === true,
+    outputNamePlaceholder: tool.outputNamePlaceholder || null,
+    notes: Array.isArray(tool.notes) ? tool.notes.slice() : [],
+    submitLabel: tool.submitLabel || 'Run',
+    maxFiles: tool.maxFiles || null,
+    maxFileSizeMb: tool.maxFileSizeMb || null,
+    maxTotalInputSizeMb: tool.maxTotalInputSizeMb || null,
+    hasAccess: Boolean(accessMap?.[tool.key])
+  }));
+}
 
 // Setup view engine and static
 app.set('view engine', 'ejs');
@@ -141,6 +228,9 @@ app.use((req, res, next) => {
 });
 
 const authRateLimitBuckets = new Map();
+const toolRateLimitBuckets = new Map();
+let activeToolRunsGlobal = 0;
+const activeToolRunsByKey = new Map();
 
 function makeAuthRateLimiter(scope) {
   return (req, res, next) => {
@@ -171,6 +261,56 @@ function makeAuthRateLimiter(scope) {
   };
 }
 
+function makeToolRunRateLimiter() {
+  return (req, res, next) => {
+    const toolKey = String(req.params?.toolKey || '').trim().toLowerCase();
+    const now = Date.now();
+    if (toolRateLimitBuckets.size > 5000) {
+      for (const [bucketKey, bucketValue] of toolRateLimitBuckets.entries()) {
+        if (bucketValue.resetAt <= now) toolRateLimitBuckets.delete(bucketKey);
+      }
+    }
+    const actor = req.session?.userId
+      ? `u:${req.session.userId}`
+      : `ip:${req.ip || req.socket?.remoteAddress || 'unknown'}`;
+    const bucketKey = `${toolKey}:${actor}`;
+    const current = toolRateLimitBuckets.get(bucketKey);
+
+    if (!current || current.resetAt <= now) {
+      toolRateLimitBuckets.set(bucketKey, { count: 1, resetAt: now + TOOL_RATE_LIMIT_WINDOW_MS });
+      return next();
+    }
+
+    if (current.count >= TOOL_RATE_LIMIT_MAX_RUNS) {
+      const retryAfterSeconds = Math.max(1, Math.ceil((current.resetAt - now) / 1000));
+      res.setHeader('Retry-After', String(retryAfterSeconds));
+      return res.status(429).send('Tool rate limit reached. Please try again later.');
+    }
+
+    current.count += 1;
+    toolRateLimitBuckets.set(bucketKey, current);
+    return next();
+  };
+}
+
+function tryAcquireToolRunSlot(toolKey) {
+  const normalizedToolKey = String(toolKey || '').trim();
+  const currentToolRuns = Number(activeToolRunsByKey.get(normalizedToolKey) || 0);
+  if (activeToolRunsGlobal >= TOOL_MAX_CONCURRENT_RUNS) return false;
+  if (currentToolRuns >= TOOL_MAX_CONCURRENT_RUNS_PER_TOOL) return false;
+  activeToolRunsGlobal += 1;
+  activeToolRunsByKey.set(normalizedToolKey, currentToolRuns + 1);
+  return true;
+}
+
+function releaseToolRunSlot(toolKey) {
+  const normalizedToolKey = String(toolKey || '').trim();
+  const currentToolRuns = Number(activeToolRunsByKey.get(normalizedToolKey) || 0);
+  if (currentToolRuns <= 1) activeToolRunsByKey.delete(normalizedToolKey);
+  else activeToolRunsByKey.set(normalizedToolKey, currentToolRuns - 1);
+  if (activeToolRunsGlobal > 0) activeToolRunsGlobal -= 1;
+}
+
 // Attach user role/permissions to request for authorization checks
 app.use(async (req, res, next) => {
   if (req.session && req.session.userId) {
@@ -188,13 +328,43 @@ app.use(async (req, res, next) => {
         req.session.userCanPin = req.userCanPin;
       }
     }
+    if (req.userRole === 'admin') {
+      req.userToolAccess = buildAdminToolAccessMap();
+      req.session.userToolAccess = req.userToolAccess;
+      req.session.userToolAccessLoaded = true;
+    } else {
+      if (req.session.userToolAccessLoaded === true) {
+        req.userToolAccess = normalizeToolAccessMap(req.session.userToolAccess);
+      } else {
+        const placeholders = TOOL_KEYS.map(() => '?').join(',');
+        const permissionRows = TOOL_KEYS.length === 0
+          ? []
+          : await dbAllAsync(
+            `SELECT tool_key FROM user_tool_permissions WHERE user_id = ? AND tool_key IN (${placeholders})`,
+            [req.session.userId, ...TOOL_KEYS]
+          );
+        const toolAccess = buildDefaultToolAccessMap();
+        for (const row of permissionRows) {
+          if (!row || !TOOL_KEY_SET.has(row.tool_key)) continue;
+          toolAccess[row.tool_key] = true;
+        }
+        req.userToolAccess = toolAccess;
+        req.session.userToolAccess = toolAccess;
+        req.session.userToolAccessLoaded = true;
+      }
+    }
     res.locals.userRole = req.userRole; // Make available to views
     res.locals.userCanPin = req.userCanPin;
+    res.locals.userToolAccess = req.userToolAccess;
+    res.locals.hasToolsAccess = req.userRole === 'admin' || userHasAnyToolAccess(req.userToolAccess);
   } else {
     req.userRole = null;
     req.userCanPin = false;
+    req.userToolAccess = buildDefaultToolAccessMap();
     res.locals.userRole = null;
     res.locals.userCanPin = false;
+    res.locals.userToolAccess = req.userToolAccess;
+    res.locals.hasToolsAccess = false;
   }
   next();
 });
@@ -306,6 +476,14 @@ db.serialize(() => {
     email_verified_at INTEGER,
     last_login_at INTEGER
   )`);
+  db.run(`CREATE TABLE IF NOT EXISTS user_tool_permissions (
+    user_id INTEGER NOT NULL,
+    tool_key TEXT NOT NULL,
+    granted_by INTEGER,
+    granted_at INTEGER NOT NULL,
+    PRIMARY KEY(user_id, tool_key)
+  )`);
+  db.run('CREATE INDEX IF NOT EXISTS idx_user_tool_permissions_tool_key ON user_tool_permissions(tool_key)');
   db.run(`CREATE TABLE IF NOT EXISTS pending_registrations (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     username TEXT UNIQUE,
@@ -828,6 +1006,81 @@ function validateUploadedMedia(photos, videoFile) {
     }
   }
   return null;
+}
+
+function canUseTool(req, toolKey) {
+  if (!req.session || !req.session.userId) return false;
+  if (!TOOL_KEY_SET.has(toolKey)) return false;
+  if (req.userRole === 'admin') return true;
+  return Boolean(req.userToolAccess && req.userToolAccess[toolKey]);
+}
+
+function getToolDefinition(toolKey) {
+  return toolRegistry.get(toolKey);
+}
+
+function getToolFromRequest(req) {
+  const toolKey = String(req.params?.toolKey || '').trim();
+  return getToolDefinition(toolKey);
+}
+
+function applyToolUpload(req, res, next) {
+  const tool = getToolFromRequest(req);
+  if (!tool) return res.status(404).send('Tool not found');
+  req.toolDefinition = tool;
+  const uploadMiddleware = toolUploadMiddlewares.get(tool.key);
+  if (typeof uploadMiddleware !== 'function') {
+    return res.status(500).send('Tool upload middleware is not configured');
+  }
+  return uploadMiddleware(req, res, (err) => {
+    if (err) err.toolKey = tool.key;
+    return next(err);
+  });
+}
+
+async function cleanupToolUploadedFiles(req) {
+  const files = Array.isArray(req?.files) ? req.files : [];
+  const pathsToDelete = new Set();
+  const tempRoot = `${path.resolve(os.tmpdir())}${path.sep}`;
+  for (const file of files) {
+    if (!file || typeof file.path !== 'string' || !file.path) continue;
+    const resolvedPath = path.resolve(file.path);
+    if (!resolvedPath.startsWith(tempRoot)) continue;
+    pathsToDelete.add(resolvedPath);
+  }
+  for (const filePath of pathsToDelete) {
+    try {
+      await fs.promises.unlink(filePath);
+    } catch (err) {
+      if (err && err.code !== 'ENOENT') {
+        console.error('tool upload cleanup error:', err);
+      }
+    }
+  }
+}
+
+function getToolsViewModel(req) {
+  const toolAccess = req.userRole === 'admin'
+    ? buildAdminToolAccessMap()
+    : normalizeToolAccessMap(req.userToolAccess);
+  return {
+    tools: buildToolCatalogForAccess(toolAccess),
+    hasAnyToolAccess: req.userRole === 'admin' || userHasAnyToolAccess(toolAccess)
+  };
+}
+
+function renderToolsPage(req, res, options = {}) {
+  const toolsView = getToolsViewModel(req);
+  return res.render('tools', {
+    userId: req.session.userId,
+    userRole: req.userRole,
+    userCanPin: canPinPosts(req),
+    tools: toolsView.tools,
+    hasAnyToolAccess: toolsView.hasAnyToolAccess,
+    toolError: options.toolError || null,
+    toolMessage: options.toolMessage || null,
+    toolFormValues: options.toolFormValues || {}
+  });
 }
 
 function ensureAuth(req, res, next) {
@@ -1463,6 +1716,61 @@ app.get('/', async (req, res) => {
   }
 });
 
+app.get('/tools', ensureAuth, (req, res) => {
+  const toolError = typeof req.query.error === 'string' ? req.query.error : null;
+  const toolMessage = typeof req.query.success === 'string' ? req.query.success : null;
+  return renderToolsPage(req, res, { toolError, toolMessage });
+});
+
+app.post('/tools/:toolKey/run', ensureAuth, makeToolRunRateLimiter(), applyToolUpload, verifyCsrfToken, async (req, res) => {
+  const tool = req.toolDefinition || getToolFromRequest(req);
+  if (!tool) return res.status(404).send('Tool not found');
+  if (!canUseTool(req, tool.key)) return res.status(403).send('Tool access required');
+  if (!tryAcquireToolRunSlot(tool.key)) {
+    return res.status(503).send('Tool is busy. Please try again in a moment.');
+  }
+  try {
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('Pragma', 'no-cache');
+    const result = await tool.run({
+      req,
+      body: req.body || {},
+      files: Array.isArray(req.files) ? req.files : []
+    });
+    const auditMeta = (result && result.auditMeta && typeof result.auditMeta === 'object')
+      ? result.auditMeta
+      : { toolKey: tool.key };
+    await appendAuditLog(req, `tool.${tool.key}`, 'tool', null, auditMeta);
+    if (!result || !Buffer.isBuffer(result.buffer)) {
+      return res.status(500).send('Tool did not return a valid output buffer');
+    }
+    res.setHeader('Content-Type', String(result.contentType || 'application/octet-stream'));
+    if (result.filename) {
+      res.setHeader('Content-Disposition', `attachment; filename="${String(result.filename).replace(/\"/g, '')}"`);
+    }
+    res.setHeader('Content-Length', String(result.buffer.length));
+    return res.send(result.buffer);
+  } catch (err) {
+    const rawMessage = err && err.message ? err.message : '';
+    const expectedMessage = tool.isExpectedError(rawMessage);
+    const message = expectedMessage
+      ? rawMessage
+      : `Failed to run ${tool.name}. Please check your input files and try again.`;
+    console.error(`${tool.key} error:`, err);
+    const toolFormValues = {};
+    if (typeof req.body?.outputName === 'string') {
+      toolFormValues[tool.key] = { outputName: req.body.outputName };
+    }
+    return renderToolsPage(req, res.status(expectedMessage ? 400 : 500), {
+      toolError: message,
+      toolFormValues
+    });
+  } finally {
+    releaseToolRunSlot(tool.key);
+    await cleanupToolUploadedFiles(req);
+  }
+});
+
 app.get('/entries/new', ensureAuth, async (req, res) => {
   try {
     const uploadError = req.query.error === 'daily_limit'
@@ -2051,13 +2359,39 @@ app.post('/comments/:id/delete', ensureAuth, verifyCsrfToken, async (req, res) =
 // Admin: User Management routes
 app.get('/admin/users', ensureAdmin, async (req, res) => {
   try {
-    const users = await dbAllAsync(
+    const usersBase = await dbAllAsync(
       'SELECT id, username, role, can_pin, last_login_at FROM users ORDER BY id ASC'
     );
+    const placeholders = TOOL_KEYS.map(() => '?').join(',');
+    const toolRows = TOOL_KEYS.length === 0
+      ? []
+      : await dbAllAsync(
+        `SELECT user_id, tool_key FROM user_tool_permissions WHERE tool_key IN (${placeholders})`,
+        TOOL_KEYS
+      );
+    const toolAccessByUserId = new Map();
+    for (const user of usersBase) {
+      if (user.role === 'admin') {
+        toolAccessByUserId.set(user.id, buildAdminToolAccessMap());
+      } else {
+        toolAccessByUserId.set(user.id, buildDefaultToolAccessMap());
+      }
+    }
+    for (const row of toolRows) {
+      if (!row || !TOOL_KEY_SET.has(row.tool_key)) continue;
+      const current = toolAccessByUserId.get(row.user_id) || buildDefaultToolAccessMap();
+      current[row.tool_key] = true;
+      toolAccessByUserId.set(row.user_id, current);
+    }
+    const users = usersBase.map((user) => ({
+      ...user,
+      toolAccess: toolAccessByUserId.get(user.id) || buildDefaultToolAccessMap()
+    }));
     const adminUserError = typeof req.query.error === 'string' ? req.query.error : null;
     const adminUserMessage = typeof req.query.success === 'string' ? req.query.success : null;
     res.render('admin-users', {
       users,
+      toolCatalog: TOOL_DEFINITIONS,
       userId: req.session.userId,
       userRole: req.userRole,
       adminUserError,
@@ -2128,6 +2462,13 @@ app.post('/admin/users/:id/role', ensureAdmin, verifyCsrfToken, async (req, res)
     // If updating current user's role, update session
     if (targetUserId === req.session.userId) {
       req.session.userRole = newRole;
+      if (newRole === 'admin') {
+        req.session.userToolAccess = buildAdminToolAccessMap();
+        req.session.userToolAccessLoaded = true;
+      } else {
+        req.session.userToolAccess = buildDefaultToolAccessMap();
+        req.session.userToolAccessLoaded = false;
+      }
     }
 
     res.redirect('/admin/users');
@@ -2163,6 +2504,59 @@ app.post('/admin/users/:id/pin-permission', ensureAdmin, verifyCsrfToken, async 
   } catch (err) {
     console.error(err);
     res.status(500).send('Error updating pin permission');
+  }
+});
+
+app.post('/admin/users/:id/tool-access', ensureAdmin, verifyCsrfToken, async (req, res) => {
+  const targetUserId = Number.parseInt(req.params.id, 10);
+  const toolKey = String(req.body.toolKey || '').trim();
+  const granted = String(req.body.granted || '').trim() === '1';
+
+  if (!Number.isInteger(targetUserId) || targetUserId <= 0) {
+    return res.status(400).send('Invalid user id');
+  }
+  if (!TOOL_KEY_SET.has(toolKey)) {
+    return res.status(400).send('Invalid tool key');
+  }
+
+  try {
+    const targetUser = await dbGetAsync('SELECT id, role FROM users WHERE id = ?', [targetUserId]);
+    if (!targetUser) return res.status(404).send('User not found');
+
+    if (targetUser.role !== 'admin') {
+      if (granted) {
+        await dbRunAsync(
+          `INSERT INTO user_tool_permissions(user_id, tool_key, granted_by, granted_at)
+           VALUES (?, ?, ?, ?)
+           ON CONFLICT(user_id, tool_key) DO UPDATE SET
+             granted_by = excluded.granted_by,
+             granted_at = excluded.granted_at`,
+          [targetUserId, toolKey, req.session.userId, Date.now()]
+        );
+      } else {
+        await dbRunAsync(
+          'DELETE FROM user_tool_permissions WHERE user_id = ? AND tool_key = ?',
+          [targetUserId, toolKey]
+        );
+      }
+      await appendAuditLog(req, 'user.tool_access', 'user', targetUserId, { toolKey, granted });
+    }
+
+    if (targetUserId === req.session.userId) {
+      const current = normalizeToolAccessMap(req.session.userToolAccess);
+      if (req.userRole === 'admin') {
+        req.session.userToolAccess = buildAdminToolAccessMap();
+      } else {
+        current[toolKey] = granted;
+        req.session.userToolAccess = current;
+      }
+      req.session.userToolAccessLoaded = true;
+    }
+
+    return res.redirect('/admin/users');
+  } catch (err) {
+    console.error(err);
+    return res.status(500).send('Error updating tool access');
   }
 });
 
@@ -2242,6 +2636,7 @@ app.post('/admin/users/:id/delete', ensureAdmin, verifyCsrfToken, async (req, re
     await dbRunAsync('DELETE FROM comments WHERE user_id = ?', [targetUserId]);
     await dbRunAsync('DELETE FROM entry_reactions WHERE user_id = ?', [targetUserId]);
     await dbRunAsync('DELETE FROM collections WHERE user_id = ?', [targetUserId]);
+    await dbRunAsync('DELETE FROM user_tool_permissions WHERE user_id = ?', [targetUserId]);
 
     // Delete user
     await dbRunAsync('DELETE FROM users WHERE id = ?', [targetUserId]);
@@ -2275,6 +2670,8 @@ app.post('/login', makeAuthRateLimiter('login'), verifyCsrfToken, async (req, re
     req.session.userId = row.id;
     req.session.userRole = row.role;
     req.session.userCanPin = Boolean(Number(row.can_pin || 0) === 1);
+    req.session.userToolAccess = buildDefaultToolAccessMap();
+    req.session.userToolAccessLoaded = false;
     return res.redirect('/');
   } catch (err) {
     console.error(err);
@@ -2578,6 +2975,8 @@ app.post('/register/verify', makeAuthRateLimiter('register_verify'), verifyCsrfT
     req.session.userId = insertResult.lastID;
     req.session.userRole = role;
     req.session.userCanPin = canPin === 1;
+    req.session.userToolAccess = role === 'admin' ? buildAdminToolAccessMap() : buildDefaultToolAccessMap();
+    req.session.userToolAccessLoaded = role === 'admin';
     delete req.session.pendingRegistrationUsername;
     res.redirect('/');
   } catch (err) {
@@ -2610,6 +3009,17 @@ app.locals.fileUrl = function(filename) {
 };
 
 app.use((err, req, res, next) => {
+  if (err instanceof multer.MulterError) {
+    const toolKey = String(err.toolKey || req.params?.toolKey || '').trim();
+    const tool = getToolDefinition(toolKey);
+    if (tool) {
+      cleanupToolUploadedFiles(req).catch((cleanupErr) => {
+        console.error('tool upload cleanup error:', cleanupErr);
+      });
+      const toolMessage = tool.getMulterErrorMessage(err);
+      if (toolMessage) return res.status(400).send(toolMessage);
+    }
+  }
   if (err instanceof multer.MulterError && err.code === 'LIMIT_FILE_COUNT') {
     return res.status(400).send(`You can upload up to ${MAX_IMAGES_PER_POST} images and 1 video per post.`);
   }

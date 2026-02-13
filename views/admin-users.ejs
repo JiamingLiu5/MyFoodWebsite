@@ -16,6 +16,7 @@
         </div>
         <nav class="top-nav">
           <a href="/">Home</a>
+          <a href="/tools">Tools</a>
           <a href="/admin/audit">Audit Log</a>
           <form class="top-nav-form" action="/logout" method="post">
             <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
@@ -42,6 +43,7 @@
                 <th>Username</th>
                 <th>Role</th>
                 <th>Pin Right</th>
+                <th>Tool Access</th>
                 <th>Last Login</th>
                 <th>Actions</th>
               </tr>
@@ -50,6 +52,7 @@
               <% users.forEach(function(user) { %>
                 <% const hasPinRight = user.role === 'admin' || Number(user.can_pin || 0) === 1; %>
                 <% const hasExplicitPinRight = Number(user.can_pin || 0) === 1; %>
+                <% const toolAccess = user.toolAccess || {}; %>
                 <tr>
                   <td><%= user.id %></td>
                   <td>
@@ -65,6 +68,19 @@
                     <span class="permission-badge <%= hasPinRight ? 'permission-on' : 'permission-off' %>">
                       <%= hasPinRight ? 'Can Pin' : 'No Pin' %>
                     </span>
+                  </td>
+                  <td class="tool-access-cell">
+                    <% if (user.role === 'admin') { %>
+                      <span class="info-text">All tools enabled for admins</span>
+                    <% } else if (!toolCatalog || toolCatalog.length === 0) { %>
+                      <span class="info-text">No tools configured</span>
+                    <% } else { %>
+                      <% toolCatalog.forEach(function(tool) { %>
+                        <span class="permission-badge <%= toolAccess[tool.key] ? 'permission-on' : 'permission-off' %>">
+                          <%= tool.name %>: <%= toolAccess[tool.key] ? 'On' : 'Off' %>
+                        </span>
+                      <% }) %>
+                    <% } %>
                   </td>
                   <td>
                     <% if (user.last_login_at) { %>
@@ -97,8 +113,20 @@
                             <%= hasExplicitPinRight ? 'Revoke Pin Right' : 'Grant Pin Right' %>
                           </button>
                         </form>
+                        <% if (toolCatalog && toolCatalog.length > 0) { %>
+                          <% toolCatalog.forEach(function(tool) { %>
+                            <form class="inline-form" action="/admin/users/<%= user.id %>/tool-access" method="post">
+                              <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
+                              <input type="hidden" name="toolKey" value="<%= tool.key %>" />
+                              <input type="hidden" name="granted" value="<%= toolAccess[tool.key] ? 0 : 1 %>" />
+                              <button class="perm-btn" type="submit">
+                                <%= toolAccess[tool.key] ? 'Revoke ' + tool.name : 'Grant ' + tool.name %>
+                              </button>
+                            </form>
+                          <% }) %>
+                        <% } %>
                       <% } else { %>
-                        <span class="info-text">Admin always can pin</span>
+                        <span class="info-text">Admin always can pin and use tools</span>
                       <% } %>
 
                       <!-- Delete user -->
@@ -122,6 +150,7 @@
         <ul>
           <li><strong>Admin users</strong> can see all posts, create/edit/delete any post, pin/unpin posts, and manage users.</li>
           <li><strong>Pin right</strong> lets a non-admin user pin/unpin posts they can view without giving admin access.</li>
+          <li><strong>Tool access</strong> controls which non-admin users can use each page in <code>/tools</code>.</li>
           <li><strong>Password reset</strong> allows admin to set a new password for any user, including self.</li>
           <li><strong>Normal users</strong> can create and manage their own posts, and view pinned content from others.</li>
           <li>You cannot delete or demote yourself.</li>

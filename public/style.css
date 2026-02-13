@@ -902,6 +902,77 @@ body.enable-reveal .entry.is-visible{opacity:1;transform:translateY(0) scale(1)}
   color:var(--text);
 }
 
+.tool-access-cell{
+  min-width:220px;
+  display:grid;
+  gap:6px;
+}
+
+.tools-grid{
+  margin-top:18px;
+  display:grid;
+  gap:14px;
+}
+
+.tool-card{
+  border:1px solid var(--line);
+  border-radius:14px;
+  padding:14px;
+  background:var(--surface-strong);
+  box-shadow:var(--shadow-md);
+}
+
+.tool-card-header{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:10px;
+}
+
+.tool-card-header h2{
+  margin:0;
+  font-family:'Cinzel',serif;
+  font-size:22px;
+}
+
+.tool-status{
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  min-height:28px;
+  padding:4px 10px;
+  border-radius:999px;
+  border:1px solid transparent;
+  font-size:12px;
+  font-weight:700;
+}
+
+.tool-status-on{
+  border-color:#b8d8c8;
+  color:var(--primary);
+  background:var(--primary-soft);
+}
+
+.tool-status-off{
+  border-color:#d0d8e0;
+  color:#5f6d7a;
+  background:#eef2f6;
+}
+
+.tool-form{
+  margin-top:10px;
+}
+
+.tool-form button{
+  width:200px;
+}
+
+.tool-note{
+  margin:0;
+  color:var(--muted);
+  font-size:13px;
+}
+
 .comment-form{margin-top:10px}
 .comments-list{display:grid;gap:10px;margin-top:10px}
 .comment-item{
@@ -1269,6 +1340,8 @@ body.has-action-sidebar.sidebar-collapsed{
   .users-table th,.users-table td{padding:10px 8px}
   .user-actions{flex-direction:column;gap:6px}
   .role-btn,.delete-btn{width:100%;font-size:12px;padding:6px 12px}
+  .tool-access-cell{min-width:0}
+  .tool-form button{width:100%}
   .action-sidebar{
     left:12px;
     top:0;

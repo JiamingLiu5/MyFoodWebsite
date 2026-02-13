@@ -4,6 +4,7 @@ Simple Node.js + Express app for food posts with:
 - Multiple images + optional one video per post
 - Notes, author, location, rating
 - Pin/unpin posts (with admin-managed pin permission)
+- Tools page (`/tools`) with admin-managed per-user tool access
 - User auth with email verification
 - SQLite storage, optional Cloudflare R2 file storage
 
@@ -28,6 +29,46 @@ brew install ffmpeg
 
 - `ENABLE_VIDEO_TRANSCODE=true` (default): convert `.mov` to `.mp4`
 - `ENABLE_SERVER_VIDEO_PROCESSING=true`: generate poster images on server
+
+## Optional: PDF Merge Tool (Ghostscript)
+
+The first built-in tool is **PDF Merge** at `/tools`.
+Install Ghostscript to enable server-side PDF merging:
+
+```bash
+brew install ghostscript
+```
+
+- `GHOSTSCRIPT_PATH` (default `gs`)
+- `MAX_TOOL_PDF_FILES` (default `10`)
+- `MAX_TOOL_PDF_FILE_SIZE_MB` (default `20`)
+- `MAX_TOOL_PDF_TOTAL_INPUT_MB` (default `80`)
+- `TOOL_RUN_TIMEOUT_SECONDS` (default `45`)
+
+Security/resource controls for tool execution:
+- `TOOL_RATE_LIMIT_WINDOW_SECONDS` (default `60`)
+- `TOOL_RATE_LIMIT_MAX_RUNS` (default `6`)
+- `TOOL_MAX_CONCURRENT_RUNS` (default `2`)
+- `TOOL_MAX_CONCURRENT_RUNS_PER_TOOL` (default `1`)
+
+Current guardrails for PDF Merge:
+- Per-user tool run rate limiting.
+- Global/per-tool concurrency caps.
+- Disk-backed uploads (lower RAM usage vs in-memory upload buffers).
+- PDF signature check before processing.
+- Ghostscript runs with `-dSAFER` and timeout protection.
+- Temp upload cleanup after each run.
+
+## Extending The Tools Framework
+
+Tools are now registered through a modular registry so you can add new tools without changing the core route shape.
+
+1. Create a new tool module in `src/tools/` (follow `src/tools/pdf-merge-tool.js`).
+2. Register it in `server.js` with `toolRegistry.register(...)`.
+3. The tool will automatically:
+   - appear in `/tools`,
+   - use `/tools/:toolKey/run`,
+   - support admin per-user permission controls in `/admin/users`.
 
 ## Docker
 
@@ -67,6 +108,15 @@ sh timeback.sh 3 --yes    # non-interactive restore
 - `ENABLE_VIDEO_TRANSCODE` (default `true`)
 - `ENABLE_SERVER_VIDEO_PROCESSING` (default `false`)
 - `FFMPEG_PATH` (default `ffmpeg`)
+- `GHOSTSCRIPT_PATH` (default `gs`)
+- `MAX_TOOL_PDF_FILES` (default `10`)
+- `MAX_TOOL_PDF_FILE_SIZE_MB` (default `20`)
+- `MAX_TOOL_PDF_TOTAL_INPUT_MB` (default `80`)
+- `TOOL_RUN_TIMEOUT_SECONDS` (default `45`)
+- `TOOL_RATE_LIMIT_WINDOW_SECONDS` (default `60`)
+- `TOOL_RATE_LIMIT_MAX_RUNS` (default `6`)
+- `TOOL_MAX_CONCURRENT_RUNS` (default `2`)
+- `TOOL_MAX_CONCURRENT_RUNS_PER_TOOL` (default `1`)
 - `AUTH_RATE_LIMIT_WINDOW_MINUTES` (default `15`)
 - `AUTH_RATE_LIMIT_MAX_ATTEMPTS` (default `25`)
 

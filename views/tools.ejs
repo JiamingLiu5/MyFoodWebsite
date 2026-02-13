@@ -1,0 +1,85 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Tools</title>
+    <link rel="stylesheet" href="/static/style.css" />
+    <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
+  </head>
+  <body>
+    <div class="container">
+      <header class="page-header">
+        <div>
+          <h1 class="brand-title">ldnmeals.com Tools</h1>
+          <p class="brand-subtitle">Utility tools with admin-managed access.</p>
+        </div>
+        <nav class="top-nav">
+          <a href="/">Home</a>
+          <% if (userRole === 'admin') { %>
+            <a href="/admin/users">Manage Users</a>
+            <a href="/admin/audit">Audit Log</a>
+          <% } %>
+          <form class="top-nav-form" action="/logout" method="post">
+            <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
+            <button class="top-nav-btn" type="submit">Logout</button>
+          </form>
+        </nav>
+      </header>
+
+      <% if (toolError) { %>
+        <p class="upload-error"><%= toolError %></p>
+      <% } %>
+      <% if (toolMessage) { %>
+        <p class="success-note"><%= toolMessage %></p>
+      <% } %>
+
+      <% if (!hasAnyToolAccess) { %>
+        <div class="info-note">
+          You currently do not have access to any tools. Ask an admin to grant access in User Management.
+        </div>
+      <% } %>
+
+      <section class="tools-grid">
+        <% tools.forEach(function(tool) { %>
+          <article class="tool-card" id="<%= tool.key === 'pdf_merge' ? 'pdf-merge' : tool.key %>">
+            <div class="tool-card-header">
+              <h2><%= tool.name %></h2>
+              <span class="tool-status <%= tool.hasAccess ? 'tool-status-on' : 'tool-status-off' %>">
+                <%= tool.hasAccess ? 'Access Granted' : 'No Access' %>
+              </span>
+            </div>
+            <p class="brand-subtitle"><%= tool.description %></p>
+
+            <% if (tool.hasAccess) { %>
+              <form class="upload-form tool-form" action="/tools/<%= encodeURIComponent(tool.key) %>/run" method="post" enctype="multipart/form-data">
+                <input type="hidden" name="_csrf" value="<%= csrfToken %>" />
+                <label><%= tool.inputLabel || 'Files' %></label>
+                <input type="file" name="<%= tool.inputFieldName %>" <%= tool.fileAccept ? 'accept="' + tool.fileAccept + '"' : '' %> multiple required />
+                <% if (tool.supportsOutputName) { %>
+                  <label>Output file name (optional)</label>
+                  <input
+                    type="text"
+                    name="outputName"
+                    maxlength="120"
+                    value="<%= toolFormValues && toolFormValues[tool.key] && toolFormValues[tool.key].outputName ? toolFormValues[tool.key].outputName : '' %>"
+                    placeholder="<%= tool.outputNamePlaceholder || 'output-file' %>"
+                  />
+                <% } %>
+                <% if (tool.notes && tool.notes.length) { %>
+                  <% tool.notes.forEach(function(note) { %>
+                    <p class="tool-note"><%= note %></p>
+                  <% }) %>
+                <% } %>
+                <button type="submit"><%= tool.submitLabel || 'Run Tool' %></button>
+              </form>
+            <% } else { %>
+              <p class="tool-note">An admin must grant your account access before you can use this tool.</p>
+            <% } %>
+          </article>
+        <% }) %>
+      </section>
+    </div>
+    <script src="/static/script.js"></script>
+  </body>
+</html>

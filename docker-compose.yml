@@ -2,7 +2,7 @@ services:
   web:
     build: .
     environment:
-      NODE_ENV: ${NODE_ENV:-production}
+      NODE_ENV: ${NODE_ENV:-development}
       PORT: ${PORT:-3000}
       SESSION_SECRET: ${SESSION_SECRET:-devsecret}
       DB_PATH: ${DB_PATH:-/app/data/data.db}
@@ -45,8 +45,6 @@ services:
       - /tmp:size=256m,mode=1777
     security_opt:
       - no-new-privileges:true
-    cap_drop:
-      - ALL
     pids_limit: 256
     healthcheck:
       test:

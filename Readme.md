@@ -87,9 +87,8 @@ docker compose exec web node -e "require('http').get('http://127.0.0.1:3000/heal
 ```
 
 The web container now runs with:
-- non-root user
 - read-only root filesystem
-- `no-new-privileges` + dropped Linux capabilities
+- `no-new-privileges`
 - `/tmp` mounted as tmpfs for tool temp files
 
 Persistent paths:

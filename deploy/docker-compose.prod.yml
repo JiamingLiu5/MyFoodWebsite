@@ -48,8 +48,6 @@ services:
       - /tmp:size=256m,mode=1777
     security_opt:
       - no-new-privileges:true
-    cap_drop:
-      - ALL
     pids_limit: 256
     healthcheck:
       test:

@@ -2,6 +2,7 @@ services:
   web:
     build: .
     environment:
+      NODE_ENV: ${NODE_ENV:-production}
       PORT: ${PORT:-3000}
       SESSION_SECRET: ${SESSION_SECRET:-devsecret}
       DB_PATH: ${DB_PATH:-/app/data/data.db}
@@ -38,4 +39,23 @@ services:
     volumes:
       - ./uploads:/app/uploads
       - ./data:/app/data
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:size=256m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 256
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "require('http').get('http://127.0.0.1:3000/healthz',res=>process.exit(res.statusCode===200?0:1)).on('error',()=>process.exit(1));"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
     restart: unless-stopped

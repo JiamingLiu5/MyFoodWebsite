@@ -21,9 +21,12 @@ try {
 
 const app = express();
 app.disable('x-powered-by');
+const NODE_ENV = String(process.env.NODE_ENV || 'development').trim().toLowerCase();
+const IS_PRODUCTION = NODE_ENV === 'production';
 const PORT = process.env.PORT || 3000;
 const UPLOADS_DIR = path.join(__dirname, 'uploads');
 const DB_PATH = process.env.DB_PATH || path.join(__dirname, 'data.db');
+const SESSION_SECRET = String(process.env.SESSION_SECRET || 'devsecret');
 const BODY_LIMIT = process.env.BODY_LIMIT || '256kb';
 const DAILY_UPLOAD_LIMIT = Math.max(1, Number.parseInt(process.env.DAILY_UPLOAD_LIMIT || '1000', 10));
 const DAILY_REGISTRATION_LIMIT = Math.max(1, Number.parseInt(process.env.DAILY_REGISTRATION_LIMIT || '200', 10));
@@ -96,6 +99,15 @@ const hasR2UploadConfig = Boolean(
   process.env.R2_ACCESS_KEY_ID &&
   process.env.R2_SECRET_ACCESS_KEY
 );
+const WEAK_SESSION_SECRETS = new Set([
+  'devsecret',
+  'change_this_to_a_long_random_secret',
+  'change_me'
+]);
+
+if (IS_PRODUCTION && (SESSION_SECRET.length < 24 || WEAK_SESSION_SECRETS.has(SESSION_SECRET))) {
+  console.warn('[security] Weak SESSION_SECRET detected for production runtime.');
+}
 
 fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
@@ -176,7 +188,7 @@ app.use(express.urlencoded({ extended: true, limit: BODY_LIMIT }));
 
 // Sessions (simple memory store for dev)
 app.use(session({
-  secret: process.env.SESSION_SECRET || 'devsecret',
+  secret: SESSION_SECRET,
   resave: false,
   saveUninitialized: false,
   cookie: {
@@ -1519,6 +1531,16 @@ function buildFilterQueryString(params = {}) {
   const encoded = q.toString();
   return encoded ? `?${encoded}` : '';
 }
+
+app.get('/healthz', async (_req, res) => {
+  try {
+    await dbGetAsync('SELECT 1 AS ok');
+    return res.status(200).json({ ok: true, now: Date.now() });
+  } catch (err) {
+    console.error('healthcheck error:', err);
+    return res.status(503).json({ ok: false });
+  }
+});
 
 app.get('/', async (req, res) => {
   try {

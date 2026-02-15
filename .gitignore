@@ -25,3 +25,6 @@ yarn-error.log*
 
 # OS files
 .DS_Store
+
+# Local-only utility scripts
+backup-ignored-to-server.sh

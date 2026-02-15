@@ -10,6 +10,8 @@ Simple Node.js + Express app for food posts with:
 
 ## Quick Start
 
+Requires Node.js `22+`.
+
 ```bash
 npm install
 npm start
@@ -81,7 +83,14 @@ After image updates, rebuild so Ghostscript is included:
 ```bash
 docker compose up -d --build
 docker compose exec web gs --version
+docker compose exec web node -e "require('http').get('http://127.0.0.1:3000/healthz',r=>console.log(r.statusCode))"
 ```
+
+The web container now runs with:
+- non-root user
+- read-only root filesystem
+- `no-new-privileges` + dropped Linux capabilities
+- `/tmp` mounted as tmpfs for tool temp files
 
 Persistent paths:
 - uploads: `./uploads`
@@ -106,6 +115,7 @@ sh timeback.sh 3 --yes    # non-interactive restore
 
 ## Common Env Vars
 
+- `NODE_ENV` (default `development`, set `production` in prod)
 - `DB_PATH` (default `./data.db`)
 - `MAX_IMAGES_PER_POST` (default `10`)
 - `MAX_UPLOAD_FILE_SIZE_MB` (default `10`)

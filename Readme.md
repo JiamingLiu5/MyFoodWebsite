@@ -155,6 +155,10 @@ sh timeback.sh 3 --yes    # non-interactive restore
 - `BACKUP_ENABLED` (default `true`)
 - `BACKUP_INTERVAL_HOURS` (default `24`)
 - `BACKUP_MAX_KEEP` (default `7`)
+- `POSTS_PER_PAGE` (default `20`)
+- `CACHE_ENABLED` (default `true`)
+- `CACHE_TTL` (default `300` seconds)
+- `REDIS_URL` (optional, e.g., `redis://localhost:6379`)
 
 ## R2 Storage (optional)
 
@@ -178,3 +182,36 @@ docker compose -f deploy/docker-compose.prod.yml --env-file .env up -d --build
 ```
 
 Caddy in `deploy/docker-compose.prod.yml` handles HTTPS automatically.
+
+## Performance Optimizations
+
+The application includes several performance optimizations:
+
+- **HTTP Compression**: Automatic gzip/brotli compression (70-90% bandwidth reduction)
+- **Static File Caching**: Aggressive caching headers for assets (1 year) and uploads (30 days)
+- **Database Optimization**: WAL mode, indexes, and 64MB cache for faster queries
+- **Image Optimization**: Automatic resizing and compression with Sharp (50-80% size reduction)
+- **Pagination**: Configurable posts per page (default 20) for faster loading
+- **Session Persistence**: SQLite-based session store (survives restarts)
+- **Redis Caching** (optional): Cache frequently accessed data with configurable TTL
+
+See [PERFORMANCE_OPTIMIZATIONS.md](PERFORMANCE_OPTIMIZATIONS.md) for detailed information.
+
+### Optional: Redis Setup
+
+For production, Redis caching is highly recommended:
+
+```bash
+# macOS
+brew install redis
+brew services start redis
+
+# Ubuntu/Debian
+sudo apt-get install redis-server
+sudo systemctl start redis
+
+# Configure in .env
+CACHE_ENABLED=true
+REDIS_URL=redis://localhost:6379
+CACHE_TTL=300
+```

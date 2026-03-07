@@ -8,11 +8,15 @@ const express = require('express');
 const multer = require('multer');
 const sqlite3 = require('sqlite3').verbose();
 const session = require('express-session');
+const SqliteStore = require('better-sqlite3-session-store')(session);
 const bcrypt = require('bcryptjs');
+const compression = require('compression');
+const sharp = require('sharp');
 const { S3Client, PutObjectCommand, DeleteObjectCommand } = require('@aws-sdk/client-s3');
 const { ToolRegistry } = require('./src/framework/tool-registry');
 const { createPdfMergeTool } = require('./src/tools/pdf-merge-tool');
 const BackupManager = require('./src/backup-manager');
+const CacheManager = require('./src/cache-manager');
 let nodemailer = null;
 try {
   nodemailer = require('nodemailer');
@@ -38,6 +42,7 @@ const MAX_VIDEO_FILE_SIZE_MB = Math.max(1, Number.parseInt(process.env.MAX_VIDEO
 const MAX_VIDEO_FILE_SIZE_BYTES = MAX_VIDEO_FILE_SIZE_MB * 1024 * 1024;
 const MAX_MEDIA_UPLOAD_FILE_SIZE_BYTES = Math.max(MAX_UPLOAD_FILE_SIZE_BYTES, MAX_VIDEO_FILE_SIZE_BYTES);
 const MAX_FILES_PER_POST = MAX_IMAGES_PER_POST + 1;
+const POSTS_PER_PAGE = Math.max(10, Number.parseInt(process.env.POSTS_PER_PAGE || '20', 10));
 const ENABLE_SERVER_VIDEO_PROCESSING = process.env.ENABLE_SERVER_VIDEO_PROCESSING === 'true';
 const ENABLE_VIDEO_TRANSCODE = process.env.ENABLE_VIDEO_TRANSCODE !== 'false';
 const FFMPEG_PATH = String(process.env.FFMPEG_PATH || 'ffmpeg').trim() || 'ffmpeg';
@@ -118,6 +123,17 @@ const BACKUP_ENABLED = process.env.BACKUP_ENABLED !== 'false';
 const BACKUP_INTERVAL_HOURS = Math.max(1, Number.parseInt(process.env.BACKUP_INTERVAL_HOURS || '24', 10));
 const BACKUP_MAX_KEEP = Math.max(1, Number.parseInt(process.env.BACKUP_MAX_KEEP || '7', 10));
 
+// Initialize cache manager
+const CACHE_ENABLED = process.env.CACHE_ENABLED !== 'false';
+const REDIS_URL = process.env.REDIS_URL || null;
+const CACHE_TTL = Math.max(60, Number.parseInt(process.env.CACHE_TTL || '300', 10));
+
+const cacheManager = new CacheManager({
+  enabled: CACHE_ENABLED && Boolean(REDIS_URL),
+  redisUrl: REDIS_URL,
+  ttl: CACHE_TTL
+});
+
 const backupManager = new BackupManager({
   dbPath: DB_PATH,
   uploadsDir: UPLOADS_DIR,
@@ -197,19 +213,54 @@ function buildToolCatalogForAccess(accessMap) {
 // Setup view engine and static
 app.set('view engine', 'ejs');
 app.set('views', path.join(__dirname, 'views'));
-app.use('/static', express.static(path.join(__dirname, 'public')));
-app.use('/uploads', express.static(UPLOADS_DIR));
+
+// Enable compression for all responses
+app.use(compression({
+  level: 6,
+  threshold: 1024, // Only compress responses larger than 1KB
+  filter: (req, res) => {
+    if (req.headers['x-no-compression']) return false;
+    return compression.filter(req, res);
+  }
+}));
+
+// Static files with aggressive caching
+app.use('/static', express.static(path.join(__dirname, 'public'), {
+  maxAge: '1y',
+  immutable: true,
+  etag: true
+}));
+
+app.use('/uploads', express.static(UPLOADS_DIR, {
+  maxAge: '30d',
+  etag: true,
+  lastModified: true
+}));
+
 app.use(express.urlencoded({ extended: true, limit: BODY_LIMIT }));
 
-// Sessions (simple memory store for dev)
+// DB
+const db = new sqlite3.Database(DB_PATH);
+
+// Sessions with SQLite store for persistence (after db initialization)
+const sessionStore = new SqliteStore({
+  client: db,
+  expired: {
+    clear: true,
+    intervalMs: 900000 // Clean up expired sessions every 15 minutes
+  }
+});
+
 app.use(session({
+  store: sessionStore,
   secret: SESSION_SECRET,
   resave: false,
   saveUninitialized: false,
   cookie: {
     secure: SESSION_COOKIE_SECURE,
     sameSite: SESSION_COOKIE_SAME_SITE,
-    httpOnly: true
+    httpOnly: true,
+    maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days
   }
 }));
 
@@ -396,8 +447,6 @@ app.use(async (req, res, next) => {
   next();
 });
 
-// DB
-const db = new sqlite3.Database(DB_PATH);
 db.serialize(() => {
   const hasColumn = (cols, name) => Array.isArray(cols) && cols.some((col) => col.name === name);
   const addColumnIfMissing = (tableName, cols, columnName, columnTypeSql, options = {}) => {
@@ -568,6 +617,20 @@ db.serialize(() => {
     created_at INTEGER NOT NULL
   )`);
   db.run('CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs(created_at)');
+
+  // Enable WAL mode for better concurrent performance
+  db.run('PRAGMA journal_mode = WAL');
+  db.run('PRAGMA synchronous = NORMAL');
+  db.run('PRAGMA cache_size = -64000'); // 64MB cache
+  db.run('PRAGMA temp_store = MEMORY');
+  db.run('PRAGMA mmap_size = 30000000000'); // 30GB memory-mapped I/O
+
+  // Add performance indexes
+  db.run('CREATE INDEX IF NOT EXISTS idx_entries_created_at ON entries(created_at DESC)');
+  db.run('CREATE INDEX IF NOT EXISTS idx_entries_pinned ON entries(pinned, created_at DESC)');
+  db.run('CREATE INDEX IF NOT EXISTS idx_entries_user_id ON entries(user_id)');
+  db.run('CREATE INDEX IF NOT EXISTS idx_users_username ON users(username)');
+
   // Migration: Add role column to users table
   db.all('PRAGMA table_info(users)', (pragmaErr, cols) => {
     if (pragmaErr) return console.error('PRAGMA users error:', pragmaErr);
@@ -831,20 +894,59 @@ function getStorageContentType(file) {
   return mime || 'application/octet-stream';
 }
 
+async function optimizeImageBuffer(buffer, mimetype) {
+  try {
+    // Only optimize images, not videos or other files
+    if (!mimetype || !mimetype.startsWith('image/')) {
+      return buffer;
+    }
+
+    const image = sharp(buffer);
+    const metadata = await image.metadata();
+
+    // Skip if image is already small enough
+    if (metadata.width <= 1920 && metadata.height <= 1920 && buffer.length < 500000) {
+      return buffer;
+    }
+
+    // Resize and compress
+    const optimized = await image
+      .resize(1920, 1920, {
+        fit: 'inside',
+        withoutEnlargement: true
+      })
+      .jpeg({
+        quality: 85,
+        progressive: true,
+        mozjpeg: true
+      })
+      .toBuffer();
+
+    // Only use optimized version if it's actually smaller
+    return optimized.length < buffer.length ? optimized : buffer;
+  } catch (err) {
+    console.error('Image optimization error:', err);
+    return buffer; // Return original on error
+  }
+}
+
 async function storeUploadedFile(file) {
   const safeOriginalName = (file.originalname || 'upload.bin').replace(/[^a-z0-9.\-\_]/gi, '_');
   const key = `${Date.now()}-${safeOriginalName}`;
+
+  // Optimize image before storing
+  const buffer = await optimizeImageBuffer(file.buffer, file.mimetype);
 
   if (hasR2UploadConfig) {
     const put = new PutObjectCommand({
       Bucket: process.env.R2_BUCKET,
       Key: key,
-      Body: file.buffer,
+      Body: buffer,
       ContentType: getStorageContentType(file)
     });
     await s3.send(put);
   } else {
-    await fs.promises.writeFile(path.join(UPLOADS_DIR, key), file.buffer);
+    await fs.promises.writeFile(path.join(UPLOADS_DIR, key), buffer);
   }
 
   return { key, originalname: file.originalname || null };
@@ -1562,6 +1664,9 @@ app.get('/', async (req, res) => {
     const isAdmin = req.userRole === 'admin';
     const userCanPin = canPinPosts(req);
     const userId = req.session.userId;
+    const page = Math.max(1, Number.parseInt(req.query.page || '1', 10));
+    const offset = (page - 1) * POSTS_PER_PAGE;
+
     const filters = {
       q: String(req.query.q || '').trim(),
       tag: String(req.query.tag || '').trim().toLowerCase(),
@@ -1673,11 +1778,25 @@ app.get('/', async (req, res) => {
     }
 
     const whereSql = where.length > 0 ? `WHERE ${where.join(' AND ')}` : '';
+
+    // Get total count for pagination
+    const countResult = await dbGetAsync(
+      `SELECT COUNT(*) as total
+       FROM entries e
+       LEFT JOIN users u ON e.user_id = u.id
+       LEFT JOIN collections c ON e.collection_id = c.id
+       ${whereSql}`,
+      params
+    );
+    const totalPosts = countResult?.total || 0;
+    const totalPages = Math.ceil(totalPosts / POSTS_PER_PAGE);
+
     const rows = await dbAllAsync(
       `${ENTRY_SELECT_WITH_AUTHOR}
        ${whereSql}
-       ORDER BY COALESCE(e.is_pinned, 0) DESC, e.created_at DESC`,
-      params
+       ORDER BY COALESCE(e.is_pinned, 0) DESC, e.created_at DESC
+       LIMIT ? OFFSET ?`,
+      [...params, POSTS_PER_PAGE, offset]
     );
 
     const ids = rows.map((row) => row.id);
@@ -1745,7 +1864,15 @@ app.get('/', async (req, res) => {
       userCollections,
       canSeeTotals: req.userRole === 'admin',
       reactionOptions: REACTION_OPTIONS,
-      currentFilterQuery: buildFilterQueryString(filters)
+      currentFilterQuery: buildFilterQueryString(filters),
+      pagination: {
+        currentPage: page,
+        totalPages,
+        totalPosts,
+        postsPerPage: POSTS_PER_PAGE,
+        hasNextPage: page < totalPages,
+        hasPrevPage: page > 1
+      }
     });
   } catch (err) {
     console.error(err);
@@ -1915,6 +2042,10 @@ app.post('/upload', ensureAuth, uploadPostMedia, verifyCsrfToken, async (req, re
       videoWasTranscoded,
       isDraft: isDraft === 1
     });
+
+    // Invalidate cache after creating entry
+    await cacheManager.delPattern('posts:*');
+    await cacheManager.delPattern('entry:*');
 
     res.redirect('/');
   } catch (err) {
@@ -2264,6 +2395,11 @@ app.post('/entries/:id/delete', ensureOwnerOrAdmin, verifyCsrfToken, async (req,
       [Date.now(), req.session.userId, entryId]
     );
     await appendAuditLog(req, 'entry.soft_delete', 'entry', entryId, null);
+
+    // Invalidate cache after deleting entry
+    await cacheManager.delPattern('posts:*');
+    await cacheManager.del(`entry:${entryId}`);
+
     const returnToRaw = typeof req.body.returnTo === 'string' ? req.body.returnTo.trim() : '';
     const returnTo = (returnToRaw === '/' || returnToRaw.startsWith('/?') || returnToRaw.startsWith('/entries/')) ? returnToRaw : '/';
     res.redirect(returnTo);
@@ -3176,14 +3312,16 @@ app.listen(PORT, () => {
 });
 
 // Graceful shutdown
-process.on('SIGTERM', () => {
+process.on('SIGTERM', async () => {
   console.log('SIGTERM received, shutting down gracefully');
   backupManager.stop();
+  await cacheManager.disconnect();
   process.exit(0);
 });
 
-process.on('SIGINT', () => {
+process.on('SIGINT', async () => {
   console.log('SIGINT received, shutting down gracefully');
   backupManager.stop();
+  await cacheManager.disconnect();
   process.exit(0);
 });

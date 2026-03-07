@@ -299,6 +299,23 @@
         <% } %>
       </section>
 
+      <% if (pagination && pagination.totalPages > 1) { %>
+        <nav class="pagination" style="margin: 2rem 0; text-align: center;">
+          <% if (pagination.hasPrevPage) { %>
+            <a href="?page=<%= pagination.currentPage - 1 %><%= currentFilterQuery ? '&' + currentFilterQuery : '' %>" class="pagination-btn">← Previous</a>
+          <% } %>
+
+          <span style="margin: 0 1rem;">
+            Page <%= pagination.currentPage %> of <%= pagination.totalPages %>
+            (<%= pagination.totalPosts %> posts)
+          </span>
+
+          <% if (pagination.hasNextPage) { %>
+            <a href="?page=<%= pagination.currentPage + 1 %><%= currentFilterQuery ? '&' + currentFilterQuery : '' %>" class="pagination-btn">Next →</a>
+          <% } %>
+        </nav>
+      <% } %>
+
     </div>
     <% if (userId) { %>
       <a

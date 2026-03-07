@@ -97,6 +97,23 @@ Persistent paths:
 
 ## Backup / Restore
 
+### Auto-Backup
+
+The server automatically backs up the database and uploads directory at regular intervals.
+
+Configuration (via environment variables):
+- `BACKUP_ENABLED` (default `true`) - Enable/disable auto-backup
+- `BACKUP_INTERVAL_HOURS` (default `24`) - Hours between backups
+- `BACKUP_MAX_KEEP` (default `7`) - Number of backups to retain
+
+Backups are stored in `./backups/` with timestamped filenames:
+- `data-YYYY-MM-DD-HHMMSS.db` (database)
+- `uploads-YYYY-MM-DD-HHMMSS.tar.gz` (uploads)
+
+The first backup runs 1 minute after server start, then repeats at the configured interval.
+
+### Manual Backup / Restore
+
 ```bash
 sh back.sh                # create backup
 sh timeback.sh 3          # restore to nearest backup from 3 days ago (or older)
@@ -135,6 +152,9 @@ sh timeback.sh 3 --yes    # non-interactive restore
 - `TOOL_MAX_CONCURRENT_RUNS_PER_TOOL` (default `1`)
 - `AUTH_RATE_LIMIT_WINDOW_MINUTES` (default `15`)
 - `AUTH_RATE_LIMIT_MAX_ATTEMPTS` (default `25`)
+- `BACKUP_ENABLED` (default `true`)
+- `BACKUP_INTERVAL_HOURS` (default `24`)
+- `BACKUP_MAX_KEEP` (default `7`)
 
 ## R2 Storage (optional)
 

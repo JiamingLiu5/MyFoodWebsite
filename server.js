@@ -12,6 +12,7 @@ const bcrypt = require('bcryptjs');
 const { S3Client, PutObjectCommand, DeleteObjectCommand } = require('@aws-sdk/client-s3');
 const { ToolRegistry } = require('./src/framework/tool-registry');
 const { createPdfMergeTool } = require('./src/tools/pdf-merge-tool');
+const BackupManager = require('./src/backup-manager');
 let nodemailer = null;
 try {
   nodemailer = require('nodemailer');
@@ -111,6 +112,20 @@ if (IS_PRODUCTION && (SESSION_SECRET.length < 24 || WEAK_SESSION_SECRETS.has(SES
 
 fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
+
+// Initialize backup manager
+const BACKUP_ENABLED = process.env.BACKUP_ENABLED !== 'false';
+const BACKUP_INTERVAL_HOURS = Math.max(1, Number.parseInt(process.env.BACKUP_INTERVAL_HOURS || '24', 10));
+const BACKUP_MAX_KEEP = Math.max(1, Number.parseInt(process.env.BACKUP_MAX_KEEP || '7', 10));
+
+const backupManager = new BackupManager({
+  dbPath: DB_PATH,
+  uploadsDir: UPLOADS_DIR,
+  backupDir: path.join(__dirname, 'backups'),
+  intervalHours: BACKUP_INTERVAL_HOURS,
+  maxBackups: BACKUP_MAX_KEEP,
+  enabled: BACKUP_ENABLED
+});
 
 if (TRUST_PROXY) {
   app.set('trust proxy', 1);
@@ -3153,4 +3168,22 @@ app.use((err, req, res, next) => {
   return next();
 });
 
-app.listen(PORT, () => console.log(`Server running on http://localhost:${PORT}`));
+app.listen(PORT, () => {
+  console.log(`Server running on http://localhost:${PORT}`);
+
+  // Start auto-backup
+  backupManager.start();
+});
+
+// Graceful shutdown
+process.on('SIGTERM', () => {
+  console.log('SIGTERM received, shutting down gracefully');
+  backupManager.stop();
+  process.exit(0);
+});
+
+process.on('SIGINT', () => {
+  console.log('SIGINT received, shutting down gracefully');
+  backupManager.stop();
+  process.exit(0);
+});

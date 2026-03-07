@@ -8,7 +8,7 @@ const express = require('express');
 const multer = require('multer');
 const sqlite3 = require('sqlite3').verbose();
 const session = require('express-session');
-const SqliteStore = require('better-sqlite3-session-store')(session);
+const SQLiteStore = require('connect-sqlite3')(session);
 const bcrypt = require('bcryptjs');
 const compression = require('compression');
 const sharp = require('sharp');
@@ -243,12 +243,10 @@ app.use(express.urlencoded({ extended: true, limit: BODY_LIMIT }));
 const db = new sqlite3.Database(DB_PATH);
 
 // Sessions with SQLite store for persistence (after db initialization)
-const sessionStore = new SqliteStore({
-  client: db,
-  expired: {
-    clear: true,
-    intervalMs: 900000 // Clean up expired sessions every 15 minutes
-  }
+const sessionStore = new SQLiteStore({
+  db: path.basename(DB_PATH, '.db'),
+  dir: path.dirname(DB_PATH),
+  table: 'sessions'
 });
 
 app.use(session({

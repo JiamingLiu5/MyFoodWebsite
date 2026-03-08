@@ -15,7 +15,7 @@ const sharp = require('sharp');
 const { S3Client, PutObjectCommand, DeleteObjectCommand } = require('@aws-sdk/client-s3');
 const { ToolRegistry } = require('./src/framework/tool-registry');
 const { createPdfMergeTool } = require('./src/tools/pdf-merge-tool');
-const { buildProviders, streamChatResponse } = require('./src/tools/ai-chat-tool');
+const { buildProviders, streamChatResponse, refreshCustomModels } = require('./src/tools/ai-chat-tool');
 const BackupManager = require('./src/backup-manager');
 const CacheManager = require('./src/cache-manager');
 let nodemailer = null;
@@ -2032,7 +2032,8 @@ function getClientProviders() {
   return result;
 }
 
-app.get('/tools/ai-chat', ensureAuth, ensureAiChatAccess, (req, res) => {
+app.get('/tools/ai-chat', ensureAuth, ensureAiChatAccess, async (req, res) => {
+  if (AI_CHAT_PROVIDERS.custom) await refreshCustomModels(AI_CHAT_PROVIDERS.custom);
   res.render('ai-chat', {
     userId: req.session.userId,
     userRole: req.userRole,
@@ -2046,6 +2047,7 @@ app.post('/tools/ai-chat/conversations', ensureAuth, ensureAiChatAccess, verifyC
     const provider = String(req.body.provider || '').trim();
     const model = String(req.body.model || '').trim();
     if (!AI_CHAT_PROVIDERS[provider]) return res.status(400).json({ error: 'Invalid provider' });
+    if (provider === 'custom' && AI_CHAT_PROVIDERS.custom) await refreshCustomModels(AI_CHAT_PROVIDERS.custom);
     if (!AI_CHAT_PROVIDERS[provider].models.includes(model)) return res.status(400).json({ error: 'Invalid model' });
     const now = Date.now();
     const result = await dbRunAsync(

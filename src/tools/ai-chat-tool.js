@@ -79,12 +79,15 @@ function buildProviders({ anthropicApiKey, openaiApiKey, customLlmApiKey, custom
 
   if (customLlmApiKey && customLlmBaseUrl) {
     const baseUrl = customLlmBaseUrl.replace(/\/+$/, '');
-    const models = customLlmModels
+    const fallbackModels = customLlmModels
       ? customLlmModels.split(',').map(m => m.trim()).filter(Boolean)
-      : ['default'];
+      : [];
     providers.custom = {
       name: customLlmName || 'Custom',
-      models,
+      models: fallbackModels.length ? fallbackModels : ['default'],
+      _baseUrl: baseUrl,
+      _apiKey: customLlmApiKey,
+      _fallbackModels: fallbackModels,
       buildRequest(messages, model) {
         return {
           url: `${baseUrl}/v1/chat/completions`,
@@ -186,4 +189,44 @@ async function streamChatResponse(provider, messages, model, { onChunk, onDone, 
   }
 }
 
-module.exports = { buildProviders, streamChatResponse };
+/**
+ * Fetch available models from a custom provider's /v1/models endpoint.
+ * Updates the provider's models list in-place. Falls back to env var models on error.
+ * Results are cached for 5 minutes.
+ */
+let _customModelsCache = null;
+let _customModelsCacheTime = 0;
+const MODELS_CACHE_TTL = 5 * 60 * 1000;
+
+async function refreshCustomModels(provider) {
+  if (!provider || !provider._baseUrl) return;
+
+  const now = Date.now();
+  if (_customModelsCache && (now - _customModelsCacheTime) < MODELS_CACHE_TTL) {
+    provider.models = _customModelsCache;
+    return;
+  }
+
+  try {
+    const res = await fetch(`${provider._baseUrl}/v1/models`, {
+      headers: provider._apiKey ? { 'Authorization': `Bearer ${provider._apiKey}` } : {},
+      signal: AbortSignal.timeout(5000)
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    const models = (data.data || data)
+      .map(m => typeof m === 'string' ? m : m.id)
+      .filter(Boolean)
+      .sort();
+    if (models.length > 0) {
+      _customModelsCache = models;
+      _customModelsCacheTime = now;
+      provider.models = models;
+    }
+  } catch (err) {
+    console.error('Failed to fetch custom models:', err.message);
+    // Keep existing models (env var fallback or previous cache)
+  }
+}
+
+module.exports = { buildProviders, streamChatResponse, refreshCustomModels };

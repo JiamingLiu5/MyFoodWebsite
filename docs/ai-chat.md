@@ -63,12 +63,14 @@ Any OpenAI-compatible API (e.g., OpenRouter, Ollama, LM Studio, vLLM).
 | Setting | Value |
 |---------|-------|
 | Endpoint | `{CUSTOM_LLM_BASE_URL}/v1/chat/completions` |
-| Models | Configured via `CUSTOM_LLM_MODELS` |
+| Models | Auto-discovered from `{CUSTOM_LLM_BASE_URL}/v1/models` |
+
+Models are fetched automatically when you open the chat page (cached for 5 minutes). If the models endpoint is unavailable, it falls back to `CUSTOM_LLM_MODELS` from the env var.
 
 ```env
 CUSTOM_LLM_API_KEY=your-key
 CUSTOM_LLM_BASE_URL=https://openrouter.ai/api
-CUSTOM_LLM_MODELS=meta-llama/llama-3-70b,mistralai/mistral-large
+CUSTOM_LLM_MODELS=model-a,model-b   # optional fallback if /v1/models is unavailable
 CUSTOM_LLM_NAME=OpenRouter
 ```
 

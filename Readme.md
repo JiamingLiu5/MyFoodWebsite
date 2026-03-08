@@ -1,217 +1,156 @@
-# MyFoodWebsite
+# Foodgraphy
 
-Simple Node.js + Express app for food posts with:
-- Multiple images + optional one video per post
-- Notes, author, location, rating
-- Pin/unpin posts (with admin-managed pin permission)
-- Tools page (`/tools`) with admin-managed per-user tool access
-- User auth with email verification
-- SQLite storage, optional Cloudflare R2 file storage
+A visual diary for meals, places, and moments. Built with Node.js, Express, and SQLite.
+
+## Features
+
+- **Food Posts** — Upload multiple images + optional video, with notes, author, location, rating, and tags
+- **Collections & Tags** — Organize posts into collections and tag them for filtering
+- **Comments & Reactions** — Emoji reactions and comments on posts
+- **AI Chat** — Built-in AI chat assistant with Claude, OpenAI, and custom provider support ([docs](docs/ai-chat.md))
+- **PDF Merge** — Merge multiple PDFs into one ([docs](docs/pdf-merge.md))
+- **User Auth** — Registration with email verification, role-based access control
+- **Admin Panel** — User management, audit logs, per-user tool permissions
+- **Auto-Backup** — Periodic database and uploads backup with configurable retention
+- **Performance** — Gzip compression, image optimization, SQLite WAL mode, optional Redis caching
+
+## Tech Stack
+
+| Layer | Technology |
+|-------|-----------|
+| Backend | Node.js 22+, Express |
+| Database | SQLite3 (WAL mode) |
+| Templates | EJS |
+| Frontend | Vanilla JS, CSS |
+| Storage | Local filesystem or Cloudflare R2 |
+| Caching | Optional Redis |
 
 ## Quick Start
 
-Requires Node.js `22+`.
-
 ```bash
+# Install dependencies
 npm install
+
+# Copy and configure environment
+cp .env.example .env
+# Edit .env with your settings (at minimum: SESSION_SECRET, SMTP_*)
+
+# Start the server
 npm start
 ```
 
-Open: `http://localhost:3000`
+Open `http://localhost:3000`. The first verified user becomes **admin**.
 
-First verified user becomes `admin`.
+## Configuration
 
-## Optional: ffmpeg
+Copy `.env.example` to `.env`. Key settings:
 
-Install ffmpeg if you want server video processing/transcoding:
+### Required
 
-```bash
-brew install ffmpeg
+| Variable | Description |
+|----------|-------------|
+| `SESSION_SECRET` | Session encryption secret (use a strong random value) |
+| `SMTP_HOST` | SMTP server for email verification |
+| `SMTP_PORT` | SMTP port (default `587`) |
+| `SMTP_USER` | SMTP username |
+| `SMTP_PASS` | SMTP password |
+| `SMTP_FROM` | Sender email address |
+
+### Optional
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `DB_PATH` | `./data.db` | SQLite database path |
+| `MAX_IMAGES_PER_POST` | `10` | Max images per post |
+| `MAX_UPLOAD_FILE_SIZE_MB` | `10` | Max image upload size |
+| `MAX_VIDEO_FILE_SIZE_MB` | `50` | Max video upload size |
+| `POSTS_PER_PAGE` | `20` | Posts per page |
+| `CACHE_ENABLED` | `true` | Enable Redis caching |
+| `REDIS_URL` | — | Redis connection URL |
+| `BACKUP_ENABLED` | `true` | Enable auto-backup |
+| `BACKUP_INTERVAL_HOURS` | `24` | Hours between backups |
+
+See [`.env.example`](.env.example) for the full list.
+
+### AI Chat
+
+Set at least one API key to enable the AI chat tool:
+
+```env
+ANTHROPIC_API_KEY=sk-ant-...     # Claude
+OPENAI_API_KEY=sk-...            # OpenAI
+CUSTOM_LLM_BASE_URL=https://...  # Any OpenAI-compatible endpoint
+CUSTOM_LLM_API_KEY=...
+CUSTOM_LLM_MODELS=model-1,model-2
 ```
 
-- `ENABLE_VIDEO_TRANSCODE=true` (default): convert `.mov` to `.mp4`
-- `ENABLE_SERVER_VIDEO_PROCESSING=true`: generate poster images on server
+See [docs/ai-chat.md](docs/ai-chat.md) for full setup details.
 
-## Optional: PDF Merge Tool (Ghostscript)
-
-The first built-in tool is **PDF Merge** at `/tools`.
-Install Ghostscript to enable server-side PDF merging:
+### Optional System Dependencies
 
 ```bash
+# Video transcoding
+brew install ffmpeg
+
+# PDF merge tool
 brew install ghostscript
 ```
 
-- `GHOSTSCRIPT_PATH` (default `gs`)
-- `MAX_TOOL_PDF_FILES` (default `10`)
-- `MAX_TOOL_PDF_FILE_SIZE_MB` (default `20`)
-- `MAX_TOOL_PDF_TOTAL_INPUT_MB` (default `80`)
-- `TOOL_RUN_TIMEOUT_SECONDS` (default `45`)
-
-Security/resource controls for tool execution:
-- `TOOL_RATE_LIMIT_WINDOW_SECONDS` (default `60`)
-- `TOOL_RATE_LIMIT_MAX_RUNS` (default `6`)
-- `TOOL_MAX_CONCURRENT_RUNS` (default `2`)
-- `TOOL_MAX_CONCURRENT_RUNS_PER_TOOL` (default `1`)
-
-Current guardrails for PDF Merge:
-- Per-user tool run rate limiting.
-- Global/per-tool concurrency caps.
-- Disk-backed uploads (lower RAM usage vs in-memory upload buffers).
-- PDF signature check before processing.
-- Ghostscript runs with `-dSAFER` and timeout protection.
-- Temp upload cleanup after each run.
-
-## Extending The Tools Framework
-
-Tools are now registered through a modular registry so you can add new tools without changing the core route shape.
-
-1. Create a new tool module in `src/tools/` (follow `src/tools/pdf-merge-tool.js`).
-2. Register it in `server.js` with `toolRegistry.register(...)`.
-3. The tool will automatically:
-   - appear in `/tools`,
-   - use `/tools/:toolKey/run`,
-   - support admin per-user permission controls in `/admin/users`.
-
 ## Docker
+
+### Development
 
 ```bash
 docker compose up --build
 ```
 
-After image updates, rebuild so Ghostscript is included:
+### Production (with Caddy for auto-HTTPS)
 
-```bash
-docker compose up -d --build
-docker compose exec web gs --version
-docker compose exec web node -e "require('http').get('http://127.0.0.1:3000/healthz',r=>console.log(r.statusCode))"
-```
-
-The web container now runs with:
-- read-only root filesystem
-- `no-new-privileges`
-- `/tmp` mounted as tmpfs for tool temp files
-
-Persistent paths:
-- uploads: `./uploads`
-- database: `./data/data.db`
-
-## Backup / Restore
-
-### Auto-Backup
-
-The server automatically backs up the database and uploads directory at regular intervals.
-
-Configuration (via environment variables):
-- `BACKUP_ENABLED` (default `true`) - Enable/disable auto-backup
-- `BACKUP_INTERVAL_HOURS` (default `24`) - Hours between backups
-- `BACKUP_MAX_KEEP` (default `7`) - Number of backups to retain
-
-Backups are stored in `./backups/` with timestamped filenames:
-- `data-YYYY-MM-DD-HHMMSS.db` (database)
-- `uploads-YYYY-MM-DD-HHMMSS.tar.gz` (uploads)
-
-The first backup runs 1 minute after server start, then repeats at the configured interval.
-
-### Manual Backup / Restore
-
-```bash
-sh back.sh                # create backup
-sh timeback.sh 3          # restore to nearest backup from 3 days ago (or older)
-sh timeback.sh 3 --yes    # non-interactive restore
-```
-
-## Required Env Vars (minimum)
-
-- `SESSION_SECRET`
-- `SMTP_HOST`
-- `SMTP_PORT`
-- `SMTP_FROM`
-- `SMTP_USER`
-- `SMTP_PASS`
-
-## Common Env Vars
-
-- `NODE_ENV` (default `development`, set `production` in prod)
-- `DB_PATH` (default `./data.db`)
-- `MAX_IMAGES_PER_POST` (default `10`)
-- `MAX_UPLOAD_FILE_SIZE_MB` (default `10`)
-- `MAX_VIDEO_FILE_SIZE_MB` (default `50`)
-- `DAILY_UPLOAD_LIMIT` (default `1000`)
-- `DAILY_REGISTRATION_LIMIT` (default `200`)
-- `ENABLE_VIDEO_TRANSCODE` (default `true`)
-- `ENABLE_SERVER_VIDEO_PROCESSING` (default `false`)
-- `FFMPEG_PATH` (default `ffmpeg`)
-- `GHOSTSCRIPT_PATH` (default `gs`)
-- `MAX_TOOL_PDF_FILES` (default `10`)
-- `MAX_TOOL_PDF_FILE_SIZE_MB` (default `20`)
-- `MAX_TOOL_PDF_TOTAL_INPUT_MB` (default `80`)
-- `TOOL_RUN_TIMEOUT_SECONDS` (default `45`)
-- `TOOL_RATE_LIMIT_WINDOW_SECONDS` (default `60`)
-- `TOOL_RATE_LIMIT_MAX_RUNS` (default `6`)
-- `TOOL_MAX_CONCURRENT_RUNS` (default `2`)
-- `TOOL_MAX_CONCURRENT_RUNS_PER_TOOL` (default `1`)
-- `AUTH_RATE_LIMIT_WINDOW_MINUTES` (default `15`)
-- `AUTH_RATE_LIMIT_MAX_ATTEMPTS` (default `25`)
-- `BACKUP_ENABLED` (default `true`)
-- `BACKUP_INTERVAL_HOURS` (default `24`)
-- `BACKUP_MAX_KEEP` (default `7`)
-- `POSTS_PER_PAGE` (default `20`)
-- `CACHE_ENABLED` (default `true`)
-- `CACHE_TTL` (default `300` seconds)
-- `REDIS_URL` (optional, e.g., `redis://localhost:6379`)
-
-## R2 Storage (optional)
-
-Set these to store uploads in Cloudflare R2 instead of local `uploads/`:
-- `R2_ENDPOINT`
-- `R2_BUCKET`
-- `R2_ACCESS_KEY_ID`
-- `R2_SECRET_ACCESS_KEY`
-- `R2_PUBLIC_BASE_URL` (optional public URL)
-
-## Production (Docker + Caddy)
-
-1. Point DNS `A` records for your domain (`@` and `www`) to your server IP.
-2. Create `.env` (or copy from `.env.example`) and set at least:
-   - `SESSION_SECRET`, `SITE_DOMAIN`, `ACME_EMAIL`
-   - SMTP variables above
+1. Point DNS to your server
+2. Configure `.env` (set `SESSION_SECRET`, `SITE_DOMAIN`, `ACME_EMAIL`, SMTP vars)
 3. Run:
 
 ```bash
 docker compose -f deploy/docker-compose.prod.yml --env-file .env up -d --build
 ```
 
-Caddy in `deploy/docker-compose.prod.yml` handles HTTPS automatically.
+## Tools Framework
 
-## Performance Optimizations
+Tools are registered through a modular registry. To add a new tool:
 
-The application includes several performance optimizations:
+1. Create a module in `src/tools/` (see `pdf-merge-tool.js` as reference)
+2. Register it in `server.js` with `toolRegistry.register(...)`
+3. It automatically appears in `/tools` with admin-managed per-user access
 
-- **HTTP Compression**: Automatic gzip/brotli compression (70-90% bandwidth reduction)
-- **Static File Caching**: Aggressive caching headers for assets (1 year) and uploads (30 days)
-- **Database Optimization**: WAL mode, indexes, and 64MB cache for faster queries
-- **Image Optimization**: Automatic resizing and compression with Sharp (50-80% size reduction)
-- **Pagination**: Configurable posts per page (default 20) for faster loading
-- **Session Persistence**: SQLite-based session store (survives restarts)
-- **Redis Caching** (optional): Cache frequently accessed data with configurable TTL
+Tool documentation: [`docs/`](docs/)
 
-See [PERFORMANCE_OPTIMIZATIONS.md](PERFORMANCE_OPTIMIZATIONS.md) for detailed information.
+## Backup & Restore
 
-### Optional: Redis Setup
+**Auto-backup** runs every 24 hours (configurable) and stores backups in `./backups/`.
 
-For production, Redis caching is highly recommended:
+**Manual backup/restore:**
 
 ```bash
-# macOS
-brew install redis
-brew services start redis
-
-# Ubuntu/Debian
-sudo apt-get install redis-server
-sudo systemctl start redis
-
-# Configure in .env
-CACHE_ENABLED=true
-REDIS_URL=redis://localhost:6379
-CACHE_TTL=300
+sh back.sh                # create backup
+sh timeback.sh 3          # restore to nearest backup from 3 days ago
+sh timeback.sh 3 --yes    # non-interactive restore
 ```
+
+## Project Structure
+
+```
+server.js                  # Main application
+src/
+  framework/tool-registry.js  # Tool plugin system
+  tools/                       # Tool implementations
+  backup-manager.js            # Auto-backup
+  cache-manager.js             # Redis cache layer
+views/                     # EJS templates
+public/                    # Static assets (JS, CSS)
+deploy/                    # Docker + Caddy production config
+docs/                      # Tool documentation
+```
+
+## License
+
+MIT

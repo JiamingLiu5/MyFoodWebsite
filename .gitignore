@@ -1,22 +1,24 @@
 # Dependencies
 node_modules/
+package-lock.json
 
-# Environment files (keep .env.example tracked)
+# Environment files
 .env
 .env.local
 .env.*.local
 
-# Runtime data
-data.db
-data/
-uploads/
-backups/
-
-# SQLite sidecar files
+# Database files
+*.db
 *.db-shm
 *.db-wal
+*.sqlite
 *.sqlite-shm
 *.sqlite-wal
+data
+
+# User data
+uploads/
+backups/
 
 # Logs
 npm-debug.log*
@@ -25,6 +27,14 @@ yarn-error.log*
 
 # OS files
 .DS_Store
+Thumbs.db
+
+# IDE / Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
 
 # Local-only utility scripts
 backup-ignored-to-server.sh

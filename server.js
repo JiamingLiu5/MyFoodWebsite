@@ -574,7 +574,6 @@ db.serialize(() => {
     db.run('CREATE INDEX IF NOT EXISTS idx_entries_created_at ON entries(created_at)');
     db.run('CREATE INDEX IF NOT EXISTS idx_entries_deleted_at ON entries(deleted_at)');
     db.run('CREATE INDEX IF NOT EXISTS idx_entries_collection_id ON entries(collection_id)');
-    db.run('CREATE INDEX IF NOT EXISTS idx_entries_user_id ON entries(user_id)');
   });
   db.run(`CREATE TABLE IF NOT EXISTS entry_images (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -701,7 +700,6 @@ db.serialize(() => {
   // Add performance indexes
   db.run('CREATE INDEX IF NOT EXISTS idx_entries_created_at ON entries(created_at DESC)');
   db.run('CREATE INDEX IF NOT EXISTS idx_entries_pinned ON entries(is_pinned, created_at DESC)');
-  db.run('CREATE INDEX IF NOT EXISTS idx_entries_user_id ON entries(user_id)');
   db.run('CREATE INDEX IF NOT EXISTS idx_users_username ON users(username)');
 
   // Migration: Add role column to users table

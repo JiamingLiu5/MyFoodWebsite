@@ -2234,31 +2234,40 @@ app.post('/tools/ai-chat/conversations/:id/messages', ensureAuth, ensureAiChatAc
     );
 
     // Build API messages with multimodal support
-    const apiMessages = history.map(m => {
-      let images = [];
+    // Merge consecutive same-role messages (can happen when previous API call failed)
+    const apiMessages = [];
+    for (const m of history) {
+      const images = [];
       if (m.attachments) {
         try {
           const atts = JSON.parse(m.attachments);
-          images = atts.map(a => {
-            return null; // placeholder for historical images
-          }).filter(Boolean);
+          // Historical images aren't re-sent (too large to store as base64)
         } catch {}
       }
-      return { role: m.role, content: m.content, images };
-    });
+      const last = apiMessages[apiMessages.length - 1];
+      if (last && last.role === m.role) {
+        // Merge consecutive same-role messages
+        const separator = last.content && m.content ? '\n\n' : '';
+        last.content = (last.content || '') + separator + (m.content || '');
+      } else {
+        apiMessages.push({ role: m.role, content: m.content || '', images });
+      }
+    }
 
     // Inject current message's files into the last user message
     const lastUserMsg = apiMessages[apiMessages.length - 1];
     if (lastUserMsg && lastUserMsg.role === 'user') {
       if (imageDataForApi.length > 0) {
         lastUserMsg.images = imageDataForApi;
-        console.log(`[AI Chat] Attaching ${imageDataForApi.length} image(s) to API request`);
+        console.log(`[AI Chat] Attaching ${imageDataForApi.length} image(s) to API request (sizes: ${imageDataForApi.map(i => (i.base64.length / 1024).toFixed(0) + 'KB').join(', ')})`);
       }
       if (documentText) {
         lastUserMsg.content = fullContentForApi;
         console.log(`[AI Chat] Attaching document text (${documentText.length} chars) to API request`);
       }
     }
+
+    console.log(`[AI Chat] Sending ${apiMessages.length} messages to ${convo.provider}/${convo.model}, has images: ${apiMessages.some(m => m.images && m.images.length > 0)}`);
 
     // Start SSE response
     res.setHeader('Content-Type', 'text/event-stream');

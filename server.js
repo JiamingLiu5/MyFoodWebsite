@@ -2113,7 +2113,21 @@ app.get('/tools/ai-chat/conversations/:id', ensureAuth, ensureAiChatAccess, asyn
   }
 });
 
-app.post('/tools/ai-chat/conversations/:id/messages', ensureAuth, ensureAiChatAccess, makeAiChatRateLimiter(), uploadAiChatFiles, verifyCsrfToken, async (req, res) => {
+function handleAiChatUpload(req, res, next) {
+  uploadAiChatFiles(req, res, (err) => {
+    if (err) {
+      console.error('AI chat file upload error:', err);
+      const msg = err.code === 'LIMIT_FILE_SIZE' ? 'File too large'
+        : err.code === 'LIMIT_FILE_COUNT' ? 'Too many files (max 5)'
+        : err.code === 'LIMIT_UNEXPECTED_FILE' ? 'Unexpected file field'
+        : 'File upload failed';
+      return res.status(400).json({ error: msg });
+    }
+    next();
+  });
+}
+
+app.post('/tools/ai-chat/conversations/:id/messages', ensureAuth, ensureAiChatAccess, makeAiChatRateLimiter(), handleAiChatUpload, verifyCsrfToken, async (req, res) => {
   const abortController = new AbortController();
   let closed = false;
   req.on('close', () => { closed = true; abortController.abort(); });
@@ -2158,43 +2172,47 @@ app.post('/tools/ai-chat/conversations/:id/messages', ensureAuth, ensureAiChatAc
     let documentText = '';
 
     for (const file of uploadedFiles) {
-      if (IMAGE_TYPES.has(file.mimetype)) {
-        // Image: optimize, store, encode for vision API
-        const optimized = await optimizeImageBuffer(file.buffer, file.mimetype);
-        const stored = await storeUploadedFile({ ...file, buffer: optimized });
-        const base64 = optimized.toString('base64');
-        attachments.push({ key: stored.key, originalname: file.originalname, mimetype: file.mimetype, type: 'image' });
-        imageDataForApi.push({ base64, mimetype: file.mimetype });
-      } else if (file.mimetype === 'application/pdf') {
-        // PDF: store and attempt text extraction
-        const stored = await storeUploadedFile(file);
-        attachments.push({ key: stored.key, originalname: file.originalname, mimetype: file.mimetype, type: 'document' });
-        if (pdfParse) {
-          try {
-            const pdfData = await pdfParse(file.buffer);
-            const textContent = (pdfData.text || '').slice(0, MAX_TEXT_EXTRACT_BYTES);
-            if (textContent.trim()) {
-              documentText += `\n\n<file name="${file.originalname}">\n${textContent}\n</file>`;
+      try {
+        if (IMAGE_TYPES.has(file.mimetype)) {
+          // Image: optimize, store, encode for vision API
+          const optimized = await optimizeImageBuffer(file.buffer, file.mimetype);
+          const stored = await storeUploadedFile({ ...file, buffer: optimized });
+          const base64 = optimized.toString('base64');
+          attachments.push({ key: stored.key, originalname: file.originalname, mimetype: file.mimetype, type: 'image' });
+          imageDataForApi.push({ base64, mimetype: file.mimetype });
+        } else if (file.mimetype === 'application/pdf') {
+          // PDF: store and attempt text extraction
+          const stored = await storeUploadedFile(file);
+          attachments.push({ key: stored.key, originalname: file.originalname, mimetype: file.mimetype, type: 'document' });
+          if (pdfParse) {
+            try {
+              const pdfData = await pdfParse(file.buffer);
+              const textContent = (pdfData.text || '').slice(0, MAX_TEXT_EXTRACT_BYTES);
+              if (textContent.trim()) {
+                documentText += `\n\n<file name="${file.originalname}">\n${textContent}\n</file>`;
+              }
+            } catch (pdfErr) {
+              console.error('PDF parse error:', pdfErr.message);
+              documentText += `\n\n[Attached PDF: ${file.originalname} — could not extract text]`;
             }
-          } catch (pdfErr) {
-            console.error('PDF parse error:', pdfErr.message);
-            documentText += `\n\n[Attached PDF: ${file.originalname} — could not extract text]`;
+          } else {
+            documentText += `\n\n[Attached PDF: ${file.originalname}]`;
           }
+        } else if (isTextFile(file)) {
+          // Text file: store and extract content for the AI
+          const stored = await storeUploadedFile(file);
+          const textContent = file.buffer.toString('utf-8').slice(0, MAX_TEXT_EXTRACT_BYTES);
+          attachments.push({ key: stored.key, originalname: file.originalname, mimetype: file.mimetype, type: 'document' });
+          const ext = path.extname(file.originalname || '').replace('.', '') || 'text';
+          documentText += `\n\n<file name="${file.originalname}">\n\`\`\`${ext}\n${textContent}\n\`\`\`\n</file>`;
         } else {
-          documentText += `\n\n[Attached PDF: ${file.originalname}]`;
+          // Other file: store for display, note to AI
+          const stored = await storeUploadedFile(file);
+          attachments.push({ key: stored.key, originalname: file.originalname, mimetype: file.mimetype, type: 'file' });
+          documentText += `\n\n[Attached file: ${file.originalname}]`;
         }
-      } else if (isTextFile(file)) {
-        // Text file: store and extract content for the AI
-        const stored = await storeUploadedFile(file);
-        const textContent = file.buffer.toString('utf-8').slice(0, MAX_TEXT_EXTRACT_BYTES);
-        attachments.push({ key: stored.key, originalname: file.originalname, mimetype: file.mimetype, type: 'document' });
-        const ext = path.extname(file.originalname || '').replace('.', '') || 'text';
-        documentText += `\n\n<file name="${file.originalname}">\n\`\`\`${ext}\n${textContent}\n\`\`\`\n</file>`;
-      } else {
-        // Other file: store for display, note to AI
-        const stored = await storeUploadedFile(file);
-        attachments.push({ key: stored.key, originalname: file.originalname, mimetype: file.mimetype, type: 'file' });
-        documentText += `\n\n[Attached file: ${file.originalname}]`;
+      } catch (fileErr) {
+        console.error(`Failed to process file ${file.originalname}:`, fileErr);
       }
     }
 

@@ -15,6 +15,7 @@ const sharp = require('sharp');
 const { S3Client, PutObjectCommand, DeleteObjectCommand } = require('@aws-sdk/client-s3');
 const { ToolRegistry } = require('./src/framework/tool-registry');
 const { createPdfMergeTool } = require('./src/tools/pdf-merge-tool');
+const { buildProviders, streamChatResponse } = require('./src/tools/ai-chat-tool');
 const BackupManager = require('./src/backup-manager');
 const CacheManager = require('./src/cache-manager');
 let nodemailer = null;
@@ -75,6 +76,8 @@ const TOOL_DEFINITIONS = Object.freeze(toolRegistry.list().map((tool) => ({
   maxTotalInputSizeMb: tool.maxTotalInputSizeMb || null
 })));
 const TOOL_KEYS = toolRegistry.keys();
+// Register ai_chat as a virtual tool key for the permission system
+TOOL_KEYS.push('ai_chat');
 const TOOL_KEY_SET = new Set(TOOL_KEYS);
 const AUTH_RATE_LIMIT_WINDOW_MINUTES = Math.max(1, Number.parseInt(process.env.AUTH_RATE_LIMIT_WINDOW_MINUTES || '15', 10));
 const AUTH_RATE_LIMIT_MAX_ATTEMPTS = Math.max(1, Number.parseInt(process.env.AUTH_RATE_LIMIT_MAX_ATTEMPTS || '25', 10));
@@ -84,6 +87,26 @@ const TOOL_RATE_LIMIT_MAX_RUNS = Math.max(1, Number.parseInt(process.env.TOOL_RA
 const TOOL_RATE_LIMIT_WINDOW_MS = TOOL_RATE_LIMIT_WINDOW_SECONDS * 1000;
 const TOOL_MAX_CONCURRENT_RUNS = Math.max(1, Number.parseInt(process.env.TOOL_MAX_CONCURRENT_RUNS || '2', 10));
 const TOOL_MAX_CONCURRENT_RUNS_PER_TOOL = Math.max(1, Number.parseInt(process.env.TOOL_MAX_CONCURRENT_RUNS_PER_TOOL || '1', 10));
+// AI Chat configuration
+const AI_CHAT_ENABLED = process.env.AI_CHAT_ENABLED !== 'false';
+const ANTHROPIC_API_KEY = (process.env.ANTHROPIC_API_KEY || '').trim();
+const OPENAI_API_KEY = (process.env.OPENAI_API_KEY || '').trim();
+const CUSTOM_LLM_API_KEY = (process.env.CUSTOM_LLM_API_KEY || '').trim();
+const CUSTOM_LLM_BASE_URL = (process.env.CUSTOM_LLM_BASE_URL || '').trim();
+const CUSTOM_LLM_MODELS = (process.env.CUSTOM_LLM_MODELS || '').trim();
+const CUSTOM_LLM_NAME = (process.env.CUSTOM_LLM_NAME || '').trim();
+const AI_CHAT_MAX_MESSAGE_LENGTH = Math.max(100, Number.parseInt(process.env.AI_CHAT_MAX_MESSAGE_LENGTH || '16000', 10));
+const AI_CHAT_RATE_LIMIT_WINDOW_SECONDS = Math.max(10, Number.parseInt(process.env.AI_CHAT_RATE_LIMIT_WINDOW_SECONDS || '60', 10));
+const AI_CHAT_RATE_LIMIT_MAX_SENDS = Math.max(1, Number.parseInt(process.env.AI_CHAT_RATE_LIMIT_MAX_SENDS || '10', 10));
+const AI_CHAT_RATE_LIMIT_WINDOW_MS = AI_CHAT_RATE_LIMIT_WINDOW_SECONDS * 1000;
+const AI_CHAT_PROVIDERS = AI_CHAT_ENABLED ? buildProviders({
+  anthropicApiKey: ANTHROPIC_API_KEY,
+  openaiApiKey: OPENAI_API_KEY,
+  customLlmApiKey: CUSTOM_LLM_API_KEY,
+  customLlmBaseUrl: CUSTOM_LLM_BASE_URL,
+  customLlmModels: CUSTOM_LLM_MODELS,
+  customLlmName: CUSTOM_LLM_NAME
+}) : {};
 const TRUST_PROXY = process.env.TRUST_PROXY === 'true';
 const SESSION_COOKIE_SECURE = process.env.SESSION_COOKIE_SECURE === 'true';
 const SESSION_COOKIE_SAME_SITE = process.env.SESSION_COOKIE_SAME_SITE || 'lax';
@@ -220,6 +243,7 @@ app.use(compression({
   threshold: 1024, // Only compress responses larger than 1KB
   filter: (req, res) => {
     if (req.headers['x-no-compression']) return false;
+    if (res.getHeader('Content-Type') === 'text/event-stream') return false;
     return compression.filter(req, res);
   }
 }));
@@ -238,6 +262,7 @@ app.use('/uploads', express.static(UPLOADS_DIR, {
 }));
 
 app.use(express.urlencoded({ extended: true, limit: BODY_LIMIT }));
+app.use(express.json({ limit: BODY_LIMIT }));
 
 // DB
 const db = new sqlite3.Database(DB_PATH);
@@ -305,6 +330,7 @@ app.use((req, res, next) => {
 
 const authRateLimitBuckets = new Map();
 const toolRateLimitBuckets = new Map();
+const aiChatRateLimitBuckets = new Map();
 let activeToolRunsGlobal = 0;
 const activeToolRunsByKey = new Map();
 
@@ -365,6 +391,34 @@ function makeToolRunRateLimiter() {
 
     current.count += 1;
     toolRateLimitBuckets.set(bucketKey, current);
+    return next();
+  };
+}
+
+function makeAiChatRateLimiter() {
+  return (req, res, next) => {
+    const now = Date.now();
+    if (aiChatRateLimitBuckets.size > 5000) {
+      for (const [k, v] of aiChatRateLimitBuckets.entries()) {
+        if (v.resetAt <= now) aiChatRateLimitBuckets.delete(k);
+      }
+    }
+    const actor = req.session?.userId
+      ? `u:${req.session.userId}`
+      : `ip:${req.ip || req.socket?.remoteAddress || 'unknown'}`;
+    const bucketKey = `ai_chat:${actor}`;
+    const current = aiChatRateLimitBuckets.get(bucketKey);
+    if (!current || current.resetAt <= now) {
+      aiChatRateLimitBuckets.set(bucketKey, { count: 1, resetAt: now + AI_CHAT_RATE_LIMIT_WINDOW_MS });
+      return next();
+    }
+    if (current.count >= AI_CHAT_RATE_LIMIT_MAX_SENDS) {
+      const retryAfterSeconds = Math.max(1, Math.ceil((current.resetAt - now) / 1000));
+      res.setHeader('Retry-After', String(retryAfterSeconds));
+      return res.status(429).json({ error: 'Rate limit reached. Please try again later.' });
+    }
+    current.count += 1;
+    aiChatRateLimitBuckets.set(bucketKey, current);
     return next();
   };
 }
@@ -615,6 +669,27 @@ db.serialize(() => {
     created_at INTEGER NOT NULL
   )`);
   db.run('CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs(created_at)');
+
+  // AI Chat tables
+  db.run(`CREATE TABLE IF NOT EXISTS ai_conversations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    title TEXT DEFAULT 'New Chat',
+    provider TEXT NOT NULL,
+    model TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  )`);
+  db.run('CREATE INDEX IF NOT EXISTS idx_ai_conversations_user_id ON ai_conversations(user_id)');
+  db.run('CREATE INDEX IF NOT EXISTS idx_ai_conversations_updated_at ON ai_conversations(updated_at DESC)');
+  db.run(`CREATE TABLE IF NOT EXISTS ai_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    conversation_id INTEGER NOT NULL,
+    role TEXT NOT NULL,
+    content TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+  )`);
+  db.run('CREATE INDEX IF NOT EXISTS idx_ai_messages_conversation_id ON ai_messages(conversation_id)');
 
   // Enable WAL mode for better concurrent performance
   db.run('PRAGMA journal_mode = WAL');
@@ -1198,15 +1273,19 @@ function getToolsViewModel(req) {
 
 function renderToolsPage(req, res, options = {}) {
   const toolsView = getToolsViewModel(req);
+  const aiChatAccess = AI_CHAT_ENABLED && Object.keys(AI_CHAT_PROVIDERS).length > 0 && canUseTool(req, 'ai_chat');
   return res.render('tools', {
     userId: req.session.userId,
     userRole: req.userRole,
     userCanPin: canPinPosts(req),
     tools: toolsView.tools,
-    hasAnyToolAccess: toolsView.hasAnyToolAccess,
+    hasAnyToolAccess: toolsView.hasAnyToolAccess || aiChatAccess,
+    aiChatEnabled: AI_CHAT_ENABLED && Object.keys(AI_CHAT_PROVIDERS).length > 0,
+    aiChatAccess,
     toolError: options.toolError || null,
     toolMessage: options.toolMessage || null,
-    toolFormValues: options.toolFormValues || {}
+    toolFormValues: options.toolFormValues || {},
+    csrfToken: ensureSessionCsrfToken(req)
   });
 }
 
@@ -1930,6 +2009,181 @@ app.post('/tools/:toolKey/run', ensureAuth, makeToolRunRateLimiter(), applyToolU
   } finally {
     releaseToolRunSlot(tool.key);
     await cleanupToolUploadedFiles(req);
+  }
+});
+
+// ── AI Chat routes ───────────────────────────────────────────────────────────
+
+function ensureAiChatAccess(req, res, next) {
+  if (!AI_CHAT_ENABLED || Object.keys(AI_CHAT_PROVIDERS).length === 0) {
+    return res.status(404).send('AI Chat is not available');
+  }
+  if (!canUseTool(req, 'ai_chat')) {
+    return res.status(403).send('AI Chat access required');
+  }
+  return next();
+}
+
+function getClientProviders() {
+  const result = {};
+  for (const [key, p] of Object.entries(AI_CHAT_PROVIDERS)) {
+    result[key] = { name: p.name, models: p.models };
+  }
+  return result;
+}
+
+app.get('/tools/ai-chat', ensureAuth, ensureAiChatAccess, (req, res) => {
+  res.render('ai-chat', {
+    userId: req.session.userId,
+    userRole: req.userRole,
+    csrfToken: ensureSessionCsrfToken(req),
+    providers: JSON.stringify(getClientProviders())
+  });
+});
+
+app.post('/tools/ai-chat/conversations', ensureAuth, ensureAiChatAccess, verifyCsrfToken, async (req, res) => {
+  try {
+    const provider = String(req.body.provider || '').trim();
+    const model = String(req.body.model || '').trim();
+    if (!AI_CHAT_PROVIDERS[provider]) return res.status(400).json({ error: 'Invalid provider' });
+    if (!AI_CHAT_PROVIDERS[provider].models.includes(model)) return res.status(400).json({ error: 'Invalid model' });
+    const now = Date.now();
+    const result = await dbRunAsync(
+      'INSERT INTO ai_conversations (user_id, title, provider, model, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
+      [req.session.userId, 'New Chat', provider, model, now, now]
+    );
+    res.json({ id: result.lastID, title: 'New Chat', provider, model, created_at: now, updated_at: now });
+  } catch (err) {
+    console.error('Create conversation error:', err);
+    res.status(500).json({ error: 'Failed to create conversation' });
+  }
+});
+
+app.get('/tools/ai-chat/conversations', ensureAuth, ensureAiChatAccess, async (req, res) => {
+  try {
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit) || 50));
+    const rows = await dbAllAsync(
+      'SELECT id, title, provider, model, created_at, updated_at FROM ai_conversations WHERE user_id = ? ORDER BY updated_at DESC LIMIT ?',
+      [req.session.userId, limit]
+    );
+    res.json(rows);
+  } catch (err) {
+    console.error('List conversations error:', err);
+    res.status(500).json({ error: 'Failed to list conversations' });
+  }
+});
+
+app.get('/tools/ai-chat/conversations/:id', ensureAuth, ensureAiChatAccess, async (req, res) => {
+  try {
+    const convo = await dbGetAsync(
+      'SELECT * FROM ai_conversations WHERE id = ? AND user_id = ?',
+      [req.params.id, req.session.userId]
+    );
+    if (!convo) return res.status(404).json({ error: 'Conversation not found' });
+    const messages = await dbAllAsync(
+      'SELECT id, role, content, created_at FROM ai_messages WHERE conversation_id = ? ORDER BY created_at ASC',
+      [convo.id]
+    );
+    res.json({ conversation: convo, messages });
+  } catch (err) {
+    console.error('Load conversation error:', err);
+    res.status(500).json({ error: 'Failed to load conversation' });
+  }
+});
+
+app.post('/tools/ai-chat/conversations/:id/messages', ensureAuth, ensureAiChatAccess, makeAiChatRateLimiter(), verifyCsrfToken, async (req, res) => {
+  const abortController = new AbortController();
+  let closed = false;
+  req.on('close', () => { closed = true; abortController.abort(); });
+
+  try {
+    const content = String(req.body.content || '').trim();
+    if (!content) return res.status(400).json({ error: 'Message content is required' });
+    if (content.length > AI_CHAT_MAX_MESSAGE_LENGTH) {
+      return res.status(400).json({ error: `Message too long (max ${AI_CHAT_MAX_MESSAGE_LENGTH} characters)` });
+    }
+    const convo = await dbGetAsync(
+      'SELECT * FROM ai_conversations WHERE id = ? AND user_id = ?',
+      [req.params.id, req.session.userId]
+    );
+    if (!convo) return res.status(404).json({ error: 'Conversation not found' });
+
+    const provider = AI_CHAT_PROVIDERS[convo.provider];
+    if (!provider) return res.status(400).json({ error: 'Provider no longer available' });
+
+    // Save user message
+    const now = Date.now();
+    await dbRunAsync(
+      'INSERT INTO ai_messages (conversation_id, role, content, created_at) VALUES (?, ?, ?, ?)',
+      [convo.id, 'user', content, now]
+    );
+
+    // Load conversation history
+    const history = await dbAllAsync(
+      'SELECT role, content FROM ai_messages WHERE conversation_id = ? ORDER BY created_at ASC',
+      [convo.id]
+    );
+
+    // Start SSE response
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.flushHeaders();
+
+    await streamChatResponse(provider, history, convo.model, {
+      signal: abortController.signal,
+      onChunk(text) {
+        if (!closed) res.write(`data: ${JSON.stringify({ text })}\n\n`);
+      },
+      async onDone(fullText) {
+        if (closed) return;
+        const doneTime = Date.now();
+        const msgResult = await dbRunAsync(
+          'INSERT INTO ai_messages (conversation_id, role, content, created_at) VALUES (?, ?, ?, ?)',
+          [convo.id, 'assistant', fullText, doneTime]
+        );
+        await dbRunAsync('UPDATE ai_conversations SET updated_at = ? WHERE id = ?', [doneTime, convo.id]);
+        // Auto-title from first user message
+        if (convo.title === 'New Chat') {
+          const title = content.slice(0, 60) + (content.length > 60 ? '...' : '');
+          await dbRunAsync('UPDATE ai_conversations SET title = ? WHERE id = ?', [title, convo.id]);
+          res.write(`data: ${JSON.stringify({ title })}\n\n`);
+        }
+        res.write(`data: ${JSON.stringify({ done: true, messageId: msgResult.lastID })}\n\n`);
+        res.end();
+      },
+      onError(err) {
+        console.error('AI stream error:', err);
+        if (!closed) {
+          res.write(`data: ${JSON.stringify({ error: err.message || 'AI request failed' })}\n\n`);
+          res.end();
+        }
+      }
+    });
+  } catch (err) {
+    console.error('AI chat message error:', err);
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Failed to process message' });
+    } else if (!closed) {
+      res.write(`data: ${JSON.stringify({ error: 'Internal error' })}\n\n`);
+      res.end();
+    }
+  }
+});
+
+app.delete('/tools/ai-chat/conversations/:id', ensureAuth, ensureAiChatAccess, verifyCsrfToken, async (req, res) => {
+  try {
+    const convo = await dbGetAsync(
+      'SELECT id FROM ai_conversations WHERE id = ? AND user_id = ?',
+      [req.params.id, req.session.userId]
+    );
+    if (!convo) return res.status(404).json({ error: 'Conversation not found' });
+    await dbRunAsync('DELETE FROM ai_messages WHERE conversation_id = ?', [convo.id]);
+    await dbRunAsync('DELETE FROM ai_conversations WHERE id = ?', [convo.id]);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('Delete conversation error:', err);
+    res.status(500).json({ error: 'Failed to delete conversation' });
   }
 });
 

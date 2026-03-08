@@ -84,6 +84,25 @@
             <% } %>
           </article>
         <% }) %>
+
+        <% if (aiChatEnabled) { %>
+          <article class="tool-card" id="ai-chat">
+            <div class="tool-card-header">
+              <h2>AI Chat</h2>
+              <span class="tool-status <%= aiChatAccess ? 'tool-status-on' : 'tool-status-off' %>">
+                <%= aiChatAccess ? 'Access Granted' : 'No Access' %>
+              </span>
+            </div>
+            <p class="brand-subtitle">AI chat assistant powered by Claude, OpenAI, or custom providers.</p>
+            <% if (aiChatAccess) { %>
+              <div class="tool-form" style="margin-top:10px">
+                <a href="/tools/ai-chat" class="ai-chat-open-link">Open AI Chat</a>
+              </div>
+            <% } else { %>
+              <p class="tool-note">An admin must grant your account access before you can use this tool.</p>
+            <% } %>
+          </article>
+        <% } %>
       </section>
     </div>
     <script src="/static/script.js"></script>

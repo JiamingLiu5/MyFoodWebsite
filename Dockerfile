@@ -8,7 +8,7 @@ RUN apt-get update \
 COPY package.json package-lock.json* ./
 RUN npm ci --omit=dev
 COPY . .
-RUN mkdir -p /app/uploads /app/data \
+RUN mkdir -p /app/uploads /app/data /app/backups \
   && chown -R node:node /app
 EXPOSE 3000
 CMD ["node","server.js"]

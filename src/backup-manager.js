@@ -88,7 +88,18 @@ class BackupManager {
           return;
         }
 
-        const backup = sourceDb.backup(backupPath);
+        let backup;
+        try {
+          backup = sourceDb.backup(backupPath);
+        } catch (backupErr) {
+          sourceDb.close();
+          reject(new Error(`Database backup init failed: ${backupErr.message}`));
+          return;
+        }
+
+        backup.on('error', (err) => {
+          // Handled in step/finish callbacks; prevent unhandled event crash
+        });
 
         backup.step(-1, (err) => {
           if (err) {

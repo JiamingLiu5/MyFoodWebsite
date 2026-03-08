@@ -2173,6 +2173,7 @@ app.post('/tools/ai-chat/conversations/:id/messages', ensureAuth, ensureAiChatAc
 
     for (const file of uploadedFiles) {
       try {
+        console.log(`[AI Chat] Processing file: ${file.originalname} (${file.mimetype}, ${(file.buffer.length / 1024).toFixed(1)}KB)`);
         if (IMAGE_TYPES.has(file.mimetype)) {
           // Image: use original buffer for API (preserves correct mimetype match)
           const base64 = file.buffer.toString('base64');
@@ -2251,9 +2252,11 @@ app.post('/tools/ai-chat/conversations/:id/messages', ensureAuth, ensureAiChatAc
     if (lastUserMsg && lastUserMsg.role === 'user') {
       if (imageDataForApi.length > 0) {
         lastUserMsg.images = imageDataForApi;
+        console.log(`[AI Chat] Attaching ${imageDataForApi.length} image(s) to API request`);
       }
       if (documentText) {
         lastUserMsg.content = fullContentForApi;
+        console.log(`[AI Chat] Attaching document text (${documentText.length} chars) to API request`);
       }
     }
 

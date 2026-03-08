@@ -494,8 +494,10 @@
           const res = await fetch(`/tools/ai-chat/conversations/${currentConvoId}/messages`, fetchOpts);
 
           if (!res.ok) {
-            const err = await res.json().catch(() => ({ error: 'Request failed' }));
-            textDiv.innerHTML = `<span class="ai-chat-error">${escapeHtml(err.error)}</span>`;
+            const errText = await res.text().catch(() => 'Request failed');
+            let errMsg;
+            try { errMsg = JSON.parse(errText).error; } catch { errMsg = errText; }
+            textDiv.innerHTML = `<span class="ai-chat-error">${escapeHtml(errMsg || 'Request failed')}</span>`;
             finishStreaming();
             return;
           }
@@ -543,7 +545,8 @@
             textDiv.innerHTML = textDiv.innerHTML || '<span class="ai-chat-error">Stopped</span>';
           } else {
             console.error('Stream error:', err);
-            textDiv.innerHTML = `<span class="ai-chat-error">Connection lost</span>`;
+            const msg = err.message || 'Connection lost';
+            textDiv.innerHTML = `<span class="ai-chat-error">${escapeHtml(msg)}</span>`;
           }
         }
 

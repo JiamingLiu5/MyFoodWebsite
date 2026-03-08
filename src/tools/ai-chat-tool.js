@@ -15,7 +15,8 @@ function formatMessagesForProvider(messages, type) {
   return messages.map(m => {
     const images = m.images && m.images.length > 0 ? m.images : null;
     if (!images) {
-      return { role: m.role, content: m.content };
+      // Ensure non-empty content (some providers reject empty strings)
+      return { role: m.role, content: m.content || '(no text)' };
     }
 
     if (type === 'claude') {
@@ -26,9 +27,7 @@ function formatMessagesForProvider(messages, type) {
           source: { type: 'base64', media_type: img.mimetype, data: img.base64 }
         });
       }
-      if (m.content) {
-        content.push({ type: 'text', text: m.content });
-      }
+      content.push({ type: 'text', text: m.content || 'What is in this image?' });
       return { role: m.role, content };
     }
 
@@ -40,9 +39,7 @@ function formatMessagesForProvider(messages, type) {
         image_url: { url: `data:${img.mimetype};base64,${img.base64}` }
       });
     }
-    if (m.content) {
-      content.push({ type: 'text', text: m.content });
-    }
+    content.push({ type: 'text', text: m.content || 'What is in this image?' });
     return { role: m.role, content };
   });
 }
@@ -86,7 +83,8 @@ function buildProviders({ anthropicApiKey, openaiApiKey, customLlmApiKey, custom
             throw new Error(parsed.error?.message || 'Claude API error');
           }
         } catch (e) {
-          if (e.message !== 'Claude API error' && !(e instanceof SyntaxError)) throw e;
+          if (e instanceof SyntaxError) return undefined; // ignore non-JSON lines
+          throw e; // propagate all real errors (including Claude API errors)
         }
         return undefined; // no text in this line
       }
@@ -177,10 +175,17 @@ async function streamChatResponse(provider, messages, model, { onChunk, onDone, 
   let fullText = '';
   try {
     const { url, options } = provider.buildRequest(messages, model);
-    const response = await fetch(url, { ...options, signal });
+    const bodySize = options.body ? options.body.length : 0;
+    console.log(`[AI Chat] Sending request to ${url} (model: ${model}, body: ${(bodySize / 1024).toFixed(1)}KB, messages: ${messages.length})`);
+
+    // Combine user abort signal with a 90-second timeout to prevent hanging
+    const timeoutSignal = AbortSignal.timeout(90000);
+    const combinedSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
+    const response = await fetch(url, { ...options, signal: combinedSignal });
 
     if (!response.ok) {
       const errorBody = await response.text();
+      console.error(`[AI Chat] API error ${response.status}:`, errorBody.slice(0, 500));
       let errorMessage;
       try {
         const parsed = JSON.parse(errorBody);
@@ -225,7 +230,12 @@ async function streamChatResponse(provider, messages, model, { onChunk, onDone, 
     // If we exited the loop without a done signal, finish up
     onDone(fullText);
   } catch (err) {
-    if (err.name === 'AbortError') return;
+    if (err.name === 'AbortError') {
+      // Distinguish user abort from timeout
+      if (signal && signal.aborted) return; // user cancelled
+      onError(new Error('Request timed out — the AI provider took too long to respond'));
+      return;
+    }
     onError(err);
   }
 }

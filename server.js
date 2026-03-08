@@ -18,6 +18,12 @@ const { createPdfMergeTool } = require('./src/tools/pdf-merge-tool');
 const { buildProviders, streamChatResponse, refreshCustomModels } = require('./src/tools/ai-chat-tool');
 const BackupManager = require('./src/backup-manager');
 const CacheManager = require('./src/cache-manager');
+let pdfParse = null;
+try {
+  pdfParse = require('pdf-parse');
+} catch (err) {
+  // Optional: PDF text extraction stays disabled until installed.
+}
 let nodemailer = null;
 try {
   nodemailer = require('nodemailer');
@@ -2159,6 +2165,24 @@ app.post('/tools/ai-chat/conversations/:id/messages', ensureAuth, ensureAiChatAc
         const base64 = optimized.toString('base64');
         attachments.push({ key: stored.key, originalname: file.originalname, mimetype: file.mimetype, type: 'image' });
         imageDataForApi.push({ base64, mimetype: file.mimetype });
+      } else if (file.mimetype === 'application/pdf') {
+        // PDF: store and attempt text extraction
+        const stored = await storeUploadedFile(file);
+        attachments.push({ key: stored.key, originalname: file.originalname, mimetype: file.mimetype, type: 'document' });
+        if (pdfParse) {
+          try {
+            const pdfData = await pdfParse(file.buffer);
+            const textContent = (pdfData.text || '').slice(0, MAX_TEXT_EXTRACT_BYTES);
+            if (textContent.trim()) {
+              documentText += `\n\n<file name="${file.originalname}">\n${textContent}\n</file>`;
+            }
+          } catch (pdfErr) {
+            console.error('PDF parse error:', pdfErr.message);
+            documentText += `\n\n[Attached PDF: ${file.originalname} — could not extract text]`;
+          }
+        } else {
+          documentText += `\n\n[Attached PDF: ${file.originalname}]`;
+        }
       } else if (isTextFile(file)) {
         // Text file: store and extract content for the AI
         const stored = await storeUploadedFile(file);
@@ -2167,9 +2191,10 @@ app.post('/tools/ai-chat/conversations/:id/messages', ensureAuth, ensureAiChatAc
         const ext = path.extname(file.originalname || '').replace('.', '') || 'text';
         documentText += `\n\n<file name="${file.originalname}">\n\`\`\`${ext}\n${textContent}\n\`\`\`\n</file>`;
       } else {
-        // Unsupported file: store for display only
+        // Other file: store for display, note to AI
         const stored = await storeUploadedFile(file);
         attachments.push({ key: stored.key, originalname: file.originalname, mimetype: file.mimetype, type: 'file' });
+        documentText += `\n\n[Attached file: ${file.originalname}]`;
       }
     }
 

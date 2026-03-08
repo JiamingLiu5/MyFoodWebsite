@@ -2174,12 +2174,12 @@ app.post('/tools/ai-chat/conversations/:id/messages', ensureAuth, ensureAiChatAc
     for (const file of uploadedFiles) {
       try {
         if (IMAGE_TYPES.has(file.mimetype)) {
-          // Image: optimize, store, encode for vision API
-          const optimized = await optimizeImageBuffer(file.buffer, file.mimetype);
-          const stored = await storeUploadedFile({ ...file, buffer: optimized });
-          const base64 = optimized.toString('base64');
-          attachments.push({ key: stored.key, originalname: file.originalname, mimetype: file.mimetype, type: 'image' });
+          // Image: use original buffer for API (preserves correct mimetype match)
+          const base64 = file.buffer.toString('base64');
           imageDataForApi.push({ base64, mimetype: file.mimetype });
+          // Store optimized version (storeUploadedFile handles optimization internally)
+          const stored = await storeUploadedFile(file);
+          attachments.push({ key: stored.key, originalname: file.originalname, mimetype: file.mimetype, type: 'image' });
         } else if (file.mimetype === 'application/pdf') {
           // PDF: store and attempt text extraction
           const stored = await storeUploadedFile(file);

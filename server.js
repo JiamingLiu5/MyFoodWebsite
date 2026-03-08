@@ -182,7 +182,7 @@ const uploadPostMedia = upload.fields([
   { name: 'photos', maxCount: MAX_IMAGES_PER_POST },
   { name: 'video', maxCount: 1 }
 ]);
-const uploadAiChatImages = upload.array('images', 5);
+const uploadAiChatFiles = upload.array('files', 5);
 const toolUploadMiddlewares = new Map(
   toolRegistry.list().map((tool) => [tool.key, tool.createUploadMiddleware(multer)])
 );
@@ -2107,14 +2107,15 @@ app.get('/tools/ai-chat/conversations/:id', ensureAuth, ensureAiChatAccess, asyn
   }
 });
 
-app.post('/tools/ai-chat/conversations/:id/messages', ensureAuth, ensureAiChatAccess, makeAiChatRateLimiter(), uploadAiChatImages, verifyCsrfToken, async (req, res) => {
+app.post('/tools/ai-chat/conversations/:id/messages', ensureAuth, ensureAiChatAccess, makeAiChatRateLimiter(), uploadAiChatFiles, verifyCsrfToken, async (req, res) => {
   const abortController = new AbortController();
   let closed = false;
   req.on('close', () => { closed = true; abortController.abort(); });
 
   try {
     const content = String(req.body.content || '').trim();
-    if (!content) return res.status(400).json({ error: 'Message content is required' });
+    const uploadedFiles = req.files || [];
+    if (!content && uploadedFiles.length === 0) return res.status(400).json({ error: 'Message content is required' });
     if (content.length > AI_CHAT_MAX_MESSAGE_LENGTH) {
       return res.status(400).json({ error: `Message too long (max ${AI_CHAT_MAX_MESSAGE_LENGTH} characters)` });
     }
@@ -2127,21 +2128,54 @@ app.post('/tools/ai-chat/conversations/:id/messages', ensureAuth, ensureAiChatAc
     const provider = AI_CHAT_PROVIDERS[convo.provider];
     if (!provider) return res.status(400).json({ error: 'Provider no longer available' });
 
-    // Process uploaded images
-    const ALLOWED_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp']);
-    const imageFiles = (req.files || []).filter(f => ALLOWED_IMAGE_TYPES.has(f.mimetype));
-    const attachments = [];
-    const imageDataForApi = [];
+    // Classify uploaded files
+    const IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp']);
+    const TEXT_EXTENSIONS = new Set([
+      '.txt', '.md', '.csv', '.json', '.xml', '.html', '.htm', '.yaml', '.yml',
+      '.toml', '.ini', '.cfg', '.conf', '.env', '.log', '.sql',
+      '.py', '.js', '.ts', '.jsx', '.tsx', '.java', '.c', '.cpp', '.h', '.hpp',
+      '.go', '.rs', '.rb', '.php', '.swift', '.kt', '.scala', '.r', '.sh',
+      '.bash', '.zsh', '.css', '.scss', '.less', '.vue', '.svelte'
+    ]);
+    const TEXT_MIME_PREFIXES = ['text/', 'application/json', 'application/xml', 'application/javascript', 'application/x-yaml', 'application/toml'];
+    const MAX_TEXT_EXTRACT_BYTES = 50000; // ~50KB text cap per file
 
-    for (const file of imageFiles) {
-      const optimized = await optimizeImageBuffer(file.buffer, file.mimetype);
-      const stored = await storeUploadedFile({ ...file, buffer: optimized });
-      const base64 = optimized.toString('base64');
-      attachments.push({ key: stored.key, originalname: file.originalname, mimetype: file.mimetype });
-      imageDataForApi.push({ base64, mimetype: file.mimetype });
+    function isTextFile(file) {
+      if (IMAGE_TYPES.has(file.mimetype)) return false;
+      const ext = path.extname(file.originalname || '').toLowerCase();
+      if (TEXT_EXTENSIONS.has(ext)) return true;
+      return TEXT_MIME_PREFIXES.some(p => file.mimetype.startsWith(p));
     }
 
-    // Save user message with attachments
+    const attachments = [];
+    const imageDataForApi = [];
+    let documentText = '';
+
+    for (const file of uploadedFiles) {
+      if (IMAGE_TYPES.has(file.mimetype)) {
+        // Image: optimize, store, encode for vision API
+        const optimized = await optimizeImageBuffer(file.buffer, file.mimetype);
+        const stored = await storeUploadedFile({ ...file, buffer: optimized });
+        const base64 = optimized.toString('base64');
+        attachments.push({ key: stored.key, originalname: file.originalname, mimetype: file.mimetype, type: 'image' });
+        imageDataForApi.push({ base64, mimetype: file.mimetype });
+      } else if (isTextFile(file)) {
+        // Text file: store and extract content for the AI
+        const stored = await storeUploadedFile(file);
+        const textContent = file.buffer.toString('utf-8').slice(0, MAX_TEXT_EXTRACT_BYTES);
+        attachments.push({ key: stored.key, originalname: file.originalname, mimetype: file.mimetype, type: 'document' });
+        const ext = path.extname(file.originalname || '').replace('.', '') || 'text';
+        documentText += `\n\n<file name="${file.originalname}">\n\`\`\`${ext}\n${textContent}\n\`\`\`\n</file>`;
+      } else {
+        // Unsupported file: store for display only
+        const stored = await storeUploadedFile(file);
+        attachments.push({ key: stored.key, originalname: file.originalname, mimetype: file.mimetype, type: 'file' });
+      }
+    }
+
+    // Build the full message content for the AI (text + extracted document content)
+    const fullContentForApi = (content + documentText).trim();
+    // Save user message (store original content, not the API-augmented version)
     const now = Date.now();
     const attachmentsJson = attachments.length > 0 ? JSON.stringify(attachments) : null;
     await dbRunAsync(
@@ -2162,19 +2196,21 @@ app.post('/tools/ai-chat/conversations/:id/messages', ensureAuth, ensureAiChatAc
         try {
           const atts = JSON.parse(m.attachments);
           images = atts.map(a => {
-            // For historical messages we need to re-read from storage, but for the current message we have base64 ready
-            return null; // placeholder
+            return null; // placeholder for historical images
           }).filter(Boolean);
         } catch {}
       }
       return { role: m.role, content: m.content, images };
     });
 
-    // Inject current message's images into the last user message
-    if (imageDataForApi.length > 0) {
-      const lastUserMsg = apiMessages[apiMessages.length - 1];
-      if (lastUserMsg && lastUserMsg.role === 'user') {
+    // Inject current message's files into the last user message
+    const lastUserMsg = apiMessages[apiMessages.length - 1];
+    if (lastUserMsg && lastUserMsg.role === 'user') {
+      if (imageDataForApi.length > 0) {
         lastUserMsg.images = imageDataForApi;
+      }
+      if (documentText) {
+        lastUserMsg.content = fullContentForApi;
       }
     }
 

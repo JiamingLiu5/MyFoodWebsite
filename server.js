@@ -182,6 +182,7 @@ const uploadPostMedia = upload.fields([
   { name: 'photos', maxCount: MAX_IMAGES_PER_POST },
   { name: 'video', maxCount: 1 }
 ]);
+const uploadAiChatImages = upload.array('images', 5);
 const toolUploadMiddlewares = new Map(
   toolRegistry.list().map((tool) => [tool.key, tool.createUploadMiddleware(multer)])
 );
@@ -689,6 +690,13 @@ db.serialize(() => {
     created_at INTEGER NOT NULL
   )`);
   db.run('CREATE INDEX IF NOT EXISTS idx_ai_messages_conversation_id ON ai_messages(conversation_id)');
+  db.all('PRAGMA table_info(ai_messages)', (pragmaErr, cols) => {
+    if (pragmaErr) return console.error('PRAGMA ai_messages error:', pragmaErr);
+    addColumnIfMissing('ai_messages', cols, 'attachments', 'TEXT DEFAULT NULL', {
+      errorLabel: 'ai_messages attachments migration error:',
+      onAdded: () => console.log('✓ Added attachments column to ai_messages')
+    });
+  });
 
   // Enable WAL mode for better concurrent performance
   db.run('PRAGMA journal_mode = WAL');
@@ -2081,17 +2089,25 @@ app.get('/tools/ai-chat/conversations/:id', ensureAuth, ensureAiChatAccess, asyn
     );
     if (!convo) return res.status(404).json({ error: 'Conversation not found' });
     const messages = await dbAllAsync(
-      'SELECT id, role, content, created_at FROM ai_messages WHERE conversation_id = ? ORDER BY created_at ASC',
+      'SELECT id, role, content, attachments, created_at FROM ai_messages WHERE conversation_id = ? ORDER BY created_at ASC',
       [convo.id]
     );
-    res.json({ conversation: convo, messages });
+    // Resolve attachment URLs for client display
+    const messagesWithUrls = messages.map(m => {
+      if (!m.attachments) return m;
+      try {
+        const atts = JSON.parse(m.attachments);
+        return { ...m, attachmentUrls: atts.map(a => ({ url: buildFileUrl(a.key), originalname: a.originalname, mimetype: a.mimetype })) };
+      } catch { return m; }
+    });
+    res.json({ conversation: convo, messages: messagesWithUrls });
   } catch (err) {
     console.error('Load conversation error:', err);
     res.status(500).json({ error: 'Failed to load conversation' });
   }
 });
 
-app.post('/tools/ai-chat/conversations/:id/messages', ensureAuth, ensureAiChatAccess, makeAiChatRateLimiter(), verifyCsrfToken, async (req, res) => {
+app.post('/tools/ai-chat/conversations/:id/messages', ensureAuth, ensureAiChatAccess, makeAiChatRateLimiter(), uploadAiChatImages, verifyCsrfToken, async (req, res) => {
   const abortController = new AbortController();
   let closed = false;
   req.on('close', () => { closed = true; abortController.abort(); });
@@ -2111,18 +2127,56 @@ app.post('/tools/ai-chat/conversations/:id/messages', ensureAuth, ensureAiChatAc
     const provider = AI_CHAT_PROVIDERS[convo.provider];
     if (!provider) return res.status(400).json({ error: 'Provider no longer available' });
 
-    // Save user message
+    // Process uploaded images
+    const ALLOWED_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp']);
+    const imageFiles = (req.files || []).filter(f => ALLOWED_IMAGE_TYPES.has(f.mimetype));
+    const attachments = [];
+    const imageDataForApi = [];
+
+    for (const file of imageFiles) {
+      const optimized = await optimizeImageBuffer(file.buffer, file.mimetype);
+      const stored = await storeUploadedFile({ ...file, buffer: optimized });
+      const base64 = optimized.toString('base64');
+      attachments.push({ key: stored.key, originalname: file.originalname, mimetype: file.mimetype });
+      imageDataForApi.push({ base64, mimetype: file.mimetype });
+    }
+
+    // Save user message with attachments
     const now = Date.now();
+    const attachmentsJson = attachments.length > 0 ? JSON.stringify(attachments) : null;
     await dbRunAsync(
-      'INSERT INTO ai_messages (conversation_id, role, content, created_at) VALUES (?, ?, ?, ?)',
-      [convo.id, 'user', content, now]
+      'INSERT INTO ai_messages (conversation_id, role, content, attachments, created_at) VALUES (?, ?, ?, ?, ?)',
+      [convo.id, 'user', content, attachmentsJson, now]
     );
 
     // Load conversation history
     const history = await dbAllAsync(
-      'SELECT role, content FROM ai_messages WHERE conversation_id = ? ORDER BY created_at ASC',
+      'SELECT role, content, attachments FROM ai_messages WHERE conversation_id = ? ORDER BY created_at ASC',
       [convo.id]
     );
+
+    // Build API messages with multimodal support
+    const apiMessages = history.map(m => {
+      let images = [];
+      if (m.attachments) {
+        try {
+          const atts = JSON.parse(m.attachments);
+          images = atts.map(a => {
+            // For historical messages we need to re-read from storage, but for the current message we have base64 ready
+            return null; // placeholder
+          }).filter(Boolean);
+        } catch {}
+      }
+      return { role: m.role, content: m.content, images };
+    });
+
+    // Inject current message's images into the last user message
+    if (imageDataForApi.length > 0) {
+      const lastUserMsg = apiMessages[apiMessages.length - 1];
+      if (lastUserMsg && lastUserMsg.role === 'user') {
+        lastUserMsg.images = imageDataForApi;
+      }
+    }
 
     // Start SSE response
     res.setHeader('Content-Type', 'text/event-stream');
@@ -2130,7 +2184,13 @@ app.post('/tools/ai-chat/conversations/:id/messages', ensureAuth, ensureAiChatAc
     res.setHeader('Connection', 'keep-alive');
     res.flushHeaders();
 
-    await streamChatResponse(provider, history, convo.model, {
+    // Send attachment URLs to client so it can display images immediately
+    if (attachments.length > 0) {
+      const attachmentUrls = attachments.map(a => ({ url: buildFileUrl(a.key), originalname: a.originalname, mimetype: a.mimetype }));
+      res.write(`data: ${JSON.stringify({ attachmentUrls })}\n\n`);
+    }
+
+    await streamChatResponse(provider, apiMessages, convo.model, {
       signal: abortController.signal,
       onChunk(text) {
         if (!closed) res.write(`data: ${JSON.stringify({ text })}\n\n`);

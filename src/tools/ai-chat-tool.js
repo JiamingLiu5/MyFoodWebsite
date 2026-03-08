@@ -6,6 +6,47 @@
  * Uses native fetch() — no SDK dependencies.
  */
 
+/**
+ * Format messages for a specific provider type, handling multimodal content.
+ * @param {Array} messages - Array of {role, content, images?} where images is [{base64, mimetype}]
+ * @param {'claude'|'openai'} type - Provider type
+ */
+function formatMessagesForProvider(messages, type) {
+  return messages.map(m => {
+    const images = m.images && m.images.length > 0 ? m.images : null;
+    if (!images) {
+      return { role: m.role, content: m.content };
+    }
+
+    if (type === 'claude') {
+      const content = [];
+      for (const img of images) {
+        content.push({
+          type: 'image',
+          source: { type: 'base64', media_type: img.mimetype, data: img.base64 }
+        });
+      }
+      if (m.content) {
+        content.push({ type: 'text', text: m.content });
+      }
+      return { role: m.role, content };
+    }
+
+    // OpenAI / Custom (OpenAI-compatible)
+    const content = [];
+    for (const img of images) {
+      content.push({
+        type: 'image_url',
+        image_url: { url: `data:${img.mimetype};base64,${img.base64}` }
+      });
+    }
+    if (m.content) {
+      content.push({ type: 'text', text: m.content });
+    }
+    return { role: m.role, content };
+  });
+}
+
 function buildProviders({ anthropicApiKey, openaiApiKey, customLlmApiKey, customLlmBaseUrl, customLlmModels, customLlmName }) {
   const providers = {};
 
@@ -27,7 +68,7 @@ function buildProviders({ anthropicApiKey, openaiApiKey, customLlmApiKey, custom
               model,
               max_tokens: 4096,
               stream: true,
-              messages: messages.map(m => ({ role: m.role, content: m.content }))
+              messages: formatMessagesForProvider(messages, 'claude')
             })
           }
         };
@@ -68,7 +109,7 @@ function buildProviders({ anthropicApiKey, openaiApiKey, customLlmApiKey, custom
             body: JSON.stringify({
               model,
               stream: true,
-              messages: messages.map(m => ({ role: m.role, content: m.content }))
+              messages: formatMessagesForProvider(messages, 'openai')
             })
           }
         };
@@ -100,7 +141,7 @@ function buildProviders({ anthropicApiKey, openaiApiKey, customLlmApiKey, custom
             body: JSON.stringify({
               model,
               stream: true,
-              messages: messages.map(m => ({ role: m.role, content: m.content }))
+              messages: formatMessagesForProvider(messages, 'openai')
             })
           }
         };
@@ -128,7 +169,7 @@ function parseOpenAISSELine(data) {
 /**
  * Stream a chat response from the given provider.
  * @param {object} provider - Provider object from buildProviders()
- * @param {Array} messages - Array of {role, content} message objects
+ * @param {Array} messages - Array of {role, content, images?} message objects
  * @param {string} model - Model ID to use
  * @param {object} callbacks - { onChunk(text), onDone(fullText), onError(err), signal }
  */

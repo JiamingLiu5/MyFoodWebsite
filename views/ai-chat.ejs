@@ -9,11 +9,17 @@
   </head>
   <body>
     <div class="ai-chat-layout">
+      <!-- Mobile backdrop -->
+      <div class="ai-chat-backdrop" id="backdrop"></div>
+
       <!-- Sidebar -->
       <aside class="ai-chat-sidebar" id="sidebar">
         <div class="ai-chat-sidebar-header">
-          <button class="ai-chat-new-btn" id="newChatBtn">+ New Chat</button>
-          <a href="/tools" class="ai-chat-back-link">Back to Tools</a>
+          <button class="ai-chat-new-btn" id="newChatBtn">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" y1="2" x2="8" y2="14"/><line x1="2" y1="8" x2="14" y2="8"/></svg>
+            New Chat
+          </button>
+          <a href="/tools" class="ai-chat-back-link">&larr; Back to Tools</a>
         </div>
         <div class="ai-chat-convo-list" id="convoList"></div>
       </aside>
@@ -27,16 +33,36 @@
             <select id="modelSelect" class="ai-chat-select"></select>
           </div>
         </div>
+
         <div class="ai-chat-messages" id="messages">
           <div class="ai-chat-empty" id="emptyState">
+            <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
             <p>Start a new conversation</p>
           </div>
         </div>
-        <div class="ai-chat-input-bar">
-          <textarea id="chatInput" placeholder="Type your message..." rows="1"></textarea>
-          <button id="sendBtn" class="ai-chat-send-btn" disabled>Send</button>
+
+        <div class="ai-chat-input-wrapper">
+          <div class="ai-chat-preview-bar" id="previewBar"></div>
+          <div class="ai-chat-input-container">
+            <button class="ai-chat-attach-btn" id="attachBtn" title="Attach images">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+            </button>
+            <input type="file" id="fileInput" accept="image/jpeg,image/png,image/gif,image/webp" multiple hidden />
+            <textarea id="chatInput" placeholder="Type your message..." rows="1"></textarea>
+            <button id="sendBtn" class="ai-chat-send-btn" disabled title="Send">
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M1.5 1.3l13.5 6.7-13.5 6.7 1.8-6.7-1.8-6.7zm2.3 1.8l1.2 4.4h7.5l-8.7-4.4zm1.2 6.4l-1.2 4.4 8.7-4.4h-7.5z"/></svg>
+            </button>
+            <button id="stopBtn" class="ai-chat-stop-btn" style="display:none" title="Stop">
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="currentColor"><rect x="1" y="1" width="12" height="12" rx="2"/></svg>
+            </button>
+          </div>
         </div>
       </main>
+
+      <!-- Drag overlay -->
+      <div class="ai-chat-drag-overlay" id="dragOverlay">
+        <div class="ai-chat-drag-box">Drop images here</div>
+      </div>
     </div>
 
     <script>
@@ -47,15 +73,23 @@
       const modelSelect = document.getElementById('modelSelect');
       const chatInput = document.getElementById('chatInput');
       const sendBtn = document.getElementById('sendBtn');
+      const stopBtn = document.getElementById('stopBtn');
       const messagesEl = document.getElementById('messages');
       const emptyState = document.getElementById('emptyState');
       const convoList = document.getElementById('convoList');
       const newChatBtn = document.getElementById('newChatBtn');
       const sidebarToggle = document.getElementById('sidebarToggle');
       const sidebar = document.getElementById('sidebar');
+      const backdrop = document.getElementById('backdrop');
+      const attachBtn = document.getElementById('attachBtn');
+      const fileInput = document.getElementById('fileInput');
+      const previewBar = document.getElementById('previewBar');
+      const dragOverlay = document.getElementById('dragOverlay');
 
       let currentConvoId = null;
       let streaming = false;
+      let currentAbortController = null;
+      let pendingFiles = [];
 
       // -- Provider / Model selectors --
       const providerKeys = Object.keys(PROVIDERS);
@@ -81,16 +115,24 @@
       updateModels();
 
       // -- Sidebar toggle (mobile) --
-      sidebarToggle.addEventListener('click', () => {
-        sidebar.classList.toggle('ai-chat-sidebar-open');
-      });
+      function toggleSidebar(open) {
+        const isOpen = open !== undefined ? open : !sidebar.classList.contains('ai-chat-sidebar-open');
+        sidebar.classList.toggle('ai-chat-sidebar-open', isOpen);
+        backdrop.classList.toggle('active', isOpen);
+      }
+      sidebarToggle.addEventListener('click', () => toggleSidebar());
+      backdrop.addEventListener('click', () => toggleSidebar(false));
 
       // -- Auto-resize textarea --
       chatInput.addEventListener('input', () => {
         chatInput.style.height = 'auto';
         chatInput.style.height = Math.min(chatInput.scrollHeight, 150) + 'px';
-        sendBtn.disabled = !chatInput.value.trim() || streaming;
+        updateSendButton();
       });
+
+      function updateSendButton() {
+        sendBtn.disabled = (!chatInput.value.trim() && pendingFiles.length === 0) || streaming;
+      }
 
       // -- Send on Enter (Shift+Enter for newline) --
       chatInput.addEventListener('keydown', (e) => {
@@ -100,6 +142,84 @@
         }
       });
       sendBtn.addEventListener('click', sendMessage);
+
+      // -- Stop button --
+      stopBtn.addEventListener('click', () => {
+        if (currentAbortController) {
+          currentAbortController.abort();
+          currentAbortController = null;
+        }
+      });
+
+      // -- File attachments --
+      attachBtn.addEventListener('click', () => fileInput.click());
+      fileInput.addEventListener('change', () => {
+        addFiles(Array.from(fileInput.files));
+        fileInput.value = '';
+      });
+
+      function addFiles(files) {
+        const allowed = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
+        for (const f of files) {
+          if (!allowed.includes(f.type)) continue;
+          if (pendingFiles.length >= 5) break;
+          pendingFiles.push(f);
+        }
+        renderPreviews();
+        updateSendButton();
+      }
+
+      function renderPreviews() {
+        previewBar.innerHTML = '';
+        pendingFiles.forEach((f, i) => {
+          const div = document.createElement('div');
+          div.className = 'ai-chat-preview-item';
+          const img = document.createElement('img');
+          img.src = URL.createObjectURL(f);
+          const removeBtn = document.createElement('button');
+          removeBtn.className = 'ai-chat-preview-remove';
+          removeBtn.innerHTML = '&times;';
+          removeBtn.addEventListener('click', () => {
+            pendingFiles.splice(i, 1);
+            renderPreviews();
+            updateSendButton();
+          });
+          div.appendChild(img);
+          div.appendChild(removeBtn);
+          previewBar.appendChild(div);
+        });
+      }
+
+      // -- Drag and drop --
+      let dragCounter = 0;
+      document.addEventListener('dragenter', (e) => {
+        e.preventDefault();
+        dragCounter++;
+        if (dragCounter === 1) dragOverlay.classList.add('active');
+      });
+      document.addEventListener('dragleave', (e) => {
+        e.preventDefault();
+        dragCounter--;
+        if (dragCounter <= 0) { dragCounter = 0; dragOverlay.classList.remove('active'); }
+      });
+      document.addEventListener('dragover', (e) => e.preventDefault());
+      document.addEventListener('drop', (e) => {
+        e.preventDefault();
+        dragCounter = 0;
+        dragOverlay.classList.remove('active');
+        if (e.dataTransfer.files.length) addFiles(Array.from(e.dataTransfer.files));
+      });
+
+      // -- Paste images from clipboard --
+      chatInput.addEventListener('paste', (e) => {
+        const items = Array.from(e.clipboardData?.items || []);
+        const imageItems = items.filter(i => i.type.startsWith('image/'));
+        if (imageItems.length > 0) {
+          e.preventDefault();
+          const files = imageItems.map(i => i.getAsFile()).filter(Boolean);
+          addFiles(files);
+        }
+      });
 
       // -- Fetch helpers --
       function apiFetch(url, opts = {}) {
@@ -127,7 +247,7 @@
             div.addEventListener('click', (e) => {
               if (e.target.classList.contains('ai-chat-convo-delete')) return;
               loadConversation(c.id);
-              sidebar.classList.remove('ai-chat-sidebar-open');
+              toggleSidebar(false);
             });
             div.querySelector('.ai-chat-convo-delete').addEventListener('click', (e) => {
               e.stopPropagation();
@@ -179,16 +299,44 @@
           return;
         }
         emptyState.style.display = 'none';
-        msgs.forEach(m => appendMessageBubble(m.role, m.content));
+        msgs.forEach(m => appendMessageRow(m.role, m.content, m.attachmentUrls));
         scrollToBottom();
       }
 
-      function appendMessageBubble(role, content) {
-        const div = document.createElement('div');
-        div.className = `ai-chat-bubble ai-chat-bubble-${role}`;
-        div.innerHTML = `<div class="ai-chat-bubble-content">${formatContent(content)}</div>`;
-        messagesEl.appendChild(div);
-        return div;
+      function appendMessageRow(role, content, attachmentUrls) {
+        const row = document.createElement('div');
+        row.className = `ai-chat-row ai-chat-row-${role}`;
+
+        const avatar = document.createElement('div');
+        avatar.className = `ai-chat-avatar ai-chat-avatar-${role}`;
+        avatar.textContent = role === 'user' ? 'U' : 'AI';
+
+        const contentDiv = document.createElement('div');
+        contentDiv.className = 'ai-chat-row-content';
+
+        // Display images if present
+        if (attachmentUrls && attachmentUrls.length > 0) {
+          const imagesDiv = document.createElement('div');
+          imagesDiv.className = 'ai-chat-msg-images';
+          attachmentUrls.forEach(att => {
+            const img = document.createElement('img');
+            img.src = att.url;
+            img.alt = att.originalname || 'Uploaded image';
+            img.addEventListener('click', () => window.open(att.url, '_blank'));
+            imagesDiv.appendChild(img);
+          });
+          contentDiv.appendChild(imagesDiv);
+        }
+
+        const textDiv = document.createElement('div');
+        textDiv.className = 'ai-chat-text';
+        textDiv.innerHTML = formatContent(content);
+        contentDiv.appendChild(textDiv);
+
+        row.appendChild(avatar);
+        row.appendChild(contentDiv);
+        messagesEl.appendChild(row);
+        return { row, contentDiv, textDiv };
       }
 
       function scrollToBottom() {
@@ -198,12 +346,19 @@
       // -- Send message --
       async function sendMessage() {
         const content = chatInput.value.trim();
-        if (!content || streaming) return;
+        if ((!content && pendingFiles.length === 0) || streaming) return;
 
         streaming = true;
-        sendBtn.disabled = true;
+        sendBtn.style.display = 'none';
+        stopBtn.style.display = '';
         chatInput.value = '';
         chatInput.style.height = 'auto';
+
+        const filesToSend = [...pendingFiles];
+        pendingFiles = [];
+        renderPreviews();
+
+        currentAbortController = new AbortController();
 
         // Create conversation if none active
         if (!currentConvoId) {
@@ -213,39 +368,61 @@
               body: { provider: providerSelect.value, model: modelSelect.value }
             });
             const data = await res.json();
-            if (data.error) { alert(data.error); streaming = false; sendBtn.disabled = false; return; }
+            if (data.error) { alert(data.error); finishStreaming(); return; }
             currentConvoId = data.id;
             emptyState.style.display = 'none';
           } catch (err) {
             console.error('Failed to create conversation:', err);
-            streaming = false;
-            sendBtn.disabled = false;
+            finishStreaming();
             return;
           }
         }
 
-        // Add user bubble
-        appendMessageBubble('user', content);
+        // Build preview URLs for user message
+        const previewUrls = filesToSend.map(f => ({
+          url: URL.createObjectURL(f),
+          originalname: f.name,
+          mimetype: f.type
+        }));
+
+        // Add user row
+        appendMessageRow('user', content, previewUrls);
         scrollToBottom();
 
-        // Add empty assistant bubble for streaming
-        const assistantBubble = appendMessageBubble('assistant', '');
-        const bubbleContent = assistantBubble.querySelector('.ai-chat-bubble-content');
-        bubbleContent.innerHTML = '<span class="ai-chat-typing">Thinking...</span>';
+        // Add empty assistant row for streaming
+        const { textDiv } = appendMessageRow('assistant', '');
+        textDiv.innerHTML = '<div class="ai-chat-typing-dots"><span></span><span></span><span></span></div>';
         scrollToBottom();
 
         try {
-          const res = await fetch(`/tools/ai-chat/conversations/${currentConvoId}/messages`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'x-csrf-token': CSRF },
-            body: JSON.stringify({ content })
-          });
+          // Build request
+          let fetchOpts;
+          if (filesToSend.length > 0) {
+            const formData = new FormData();
+            formData.append('content', content);
+            formData.append('_csrf', CSRF);
+            filesToSend.forEach(f => formData.append('images', f));
+            fetchOpts = {
+              method: 'POST',
+              headers: { 'x-csrf-token': CSRF },
+              body: formData,
+              signal: currentAbortController.signal
+            };
+          } else {
+            fetchOpts = {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'x-csrf-token': CSRF },
+              body: JSON.stringify({ content }),
+              signal: currentAbortController.signal
+            };
+          }
+
+          const res = await fetch(`/tools/ai-chat/conversations/${currentConvoId}/messages`, fetchOpts);
 
           if (!res.ok) {
             const err = await res.json().catch(() => ({ error: 'Request failed' }));
-            bubbleContent.innerHTML = `<span class="ai-chat-error">${escapeHtml(err.error)}</span>`;
-            streaming = false;
-            sendBtn.disabled = false;
+            textDiv.innerHTML = `<span class="ai-chat-error">${escapeHtml(err.error)}</span>`;
+            finishStreaming();
             return;
           }
 
@@ -270,18 +447,16 @@
               try {
                 const data = JSON.parse(jsonStr);
                 if (data.error) {
-                  bubbleContent.innerHTML = `<span class="ai-chat-error">${escapeHtml(data.error)}</span>`;
+                  textDiv.innerHTML = `<span class="ai-chat-error">${escapeHtml(data.error)}</span>`;
                   break;
                 }
                 if (data.text) {
                   fullText += data.text;
-                  bubbleContent.innerHTML = formatContent(fullText);
+                  textDiv.innerHTML = formatContent(fullText);
                   scrollToBottom();
                 }
                 if (data.title) {
-                  // Update sidebar title
-                  const item = convoList.querySelector('.ai-chat-convo-item.active .ai-chat-convo-title');
-                  if (item) item.textContent = data.title;
+                  loadConversations();
                 }
                 if (data.done) {
                   loadConversations();
@@ -290,12 +465,23 @@
             }
           }
         } catch (err) {
-          console.error('Stream error:', err);
-          bubbleContent.innerHTML = `<span class="ai-chat-error">Connection lost</span>`;
+          if (err.name === 'AbortError') {
+            textDiv.innerHTML = textDiv.innerHTML || '<span class="ai-chat-error">Stopped</span>';
+          } else {
+            console.error('Stream error:', err);
+            textDiv.innerHTML = `<span class="ai-chat-error">Connection lost</span>`;
+          }
         }
 
+        finishStreaming();
+      }
+
+      function finishStreaming() {
         streaming = false;
-        sendBtn.disabled = !chatInput.value.trim();
+        currentAbortController = null;
+        sendBtn.style.display = '';
+        stopBtn.style.display = 'none';
+        updateSendButton();
       }
 
       // -- New chat --
@@ -303,24 +489,49 @@
         currentConvoId = null;
         renderMessages([]);
         chatInput.focus();
-        sidebar.classList.remove('ai-chat-sidebar-open');
+        toggleSidebar(false);
         loadConversations();
       });
 
-      // -- Format content (simple markdown-like) --
+      // -- Format content (markdown) --
       function formatContent(text) {
         if (!text) return '';
         let html = escapeHtml(text);
-        // Code blocks
-        html = html.replace(/```(\w*)\n?([\s\S]*?)```/g, '<pre><code>$2</code></pre>');
+
+        // Code blocks with language label + copy button
+        html = html.replace(/```(\w*)\n?([\s\S]*?)```/g, (match, lang, code) => {
+          const langLabel = lang || 'code';
+          const codeId = 'code-' + Math.random().toString(36).slice(2, 8);
+          return `<div class="ai-chat-code-wrap"><div class="ai-chat-code-header"><span>${langLabel}</span><button class="ai-chat-copy-btn" onclick="copyCode('${codeId}')">Copy</button></div><pre><code id="${codeId}">${code.trim()}</code></pre></div>`;
+        });
+
         // Inline code
         html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+
+        // Headers
+        html = html.replace(/^### (.+)$/gm, '<h3>$1</h3>');
+        html = html.replace(/^## (.+)$/gm, '<h2>$1</h2>');
+        html = html.replace(/^# (.+)$/gm, '<h1>$1</h1>');
+
         // Bold
         html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
         // Italic
         html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
-        // Line breaks
+
+        // Unordered lists
+        html = html.replace(/^[\-\*] (.+)$/gm, '<li>$1</li>');
+        html = html.replace(/(<li>.*<\/li>\n?)+/g, '<ul>$&</ul>');
+
+        // Ordered lists
+        html = html.replace(/^\d+\. (.+)$/gm, '<li>$1</li>');
+
+        // Line breaks (but not inside block elements)
         html = html.replace(/\n/g, '<br>');
+
+        // Clean up extra <br> around block elements
+        html = html.replace(/<br>\s*(<\/?(h[1-3]|ul|ol|li|div|pre))/g, '$1');
+        html = html.replace(/(<\/(h[1-3]|ul|ol|li|div|pre)>)\s*<br>/g, '$1');
+
         return html;
       }
 
@@ -329,6 +540,16 @@
         div.appendChild(document.createTextNode(str));
         return div.innerHTML;
       }
+
+      // -- Copy code helper (global) --
+      window.copyCode = function(id) {
+        const el = document.getElementById(id);
+        if (!el) return;
+        navigator.clipboard.writeText(el.textContent).then(() => {
+          const btn = el.closest('.ai-chat-code-wrap').querySelector('.ai-chat-copy-btn');
+          if (btn) { btn.textContent = 'Copied!'; setTimeout(() => btn.textContent = 'Copy', 1500); }
+        });
+      };
 
       // -- Init --
       loadConversations();
